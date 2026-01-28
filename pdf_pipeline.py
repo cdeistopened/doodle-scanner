@@ -291,11 +291,16 @@ def clean_output(text: str) -> str:
 
 
 def _call_gemini_with_timeout(pdf_bytes: bytes, prompt: str, api_key: str, timeout: int) -> str:
-    """Call Gemini API with native HTTP timeout."""
+    """Call Gemini API with native HTTP timeout.
+
+    Args:
+        timeout: Timeout in seconds (converted to milliseconds for HttpOptions)
+    """
     from google import genai
 
-    # Configure client with HTTP timeout
-    http_options = genai.types.HttpOptions(timeout=timeout)
+    # Configure client with HTTP timeout (HttpOptions expects milliseconds)
+    timeout_ms = timeout * 1000
+    http_options = genai.types.HttpOptions(timeout=timeout_ms)
     client = genai.Client(api_key=api_key, http_options=http_options)
 
     response = client.models.generate_content(
@@ -477,8 +482,9 @@ def smooth_boundary(api_key: str, chunk_a_tail: str, chunk_b_head: str, timeout:
         # Use a simple direct call since this is text-only (no PDF)
         from google import genai as smooth_genai
 
-        # Add HTTP timeout for boundary smoothing
-        http_options = smooth_genai.types.HttpOptions(timeout=timeout)
+        # Add HTTP timeout for boundary smoothing (HttpOptions expects milliseconds)
+        timeout_ms = timeout * 1000
+        http_options = smooth_genai.types.HttpOptions(timeout=timeout_ms)
         client = smooth_genai.Client(api_key=api_key, http_options=http_options)
 
         response = client.models.generate_content(
