@@ -14,7 +14,6 @@ import tempfile
 import time
 import re
 import threading
-import multiprocessing
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable, Dict, Any
@@ -291,86 +290,43 @@ def clean_output(text: str) -> str:
     return cleaned
 
 
-def _gemini_worker(pdf_bytes: bytes, prompt: str, api_key: str, result_queue):
-    """Worker function for multiprocessing - runs Gemini API call."""
-    try:
-        # Import inside worker since this runs in a separate process
-        from google import genai as worker_genai
-
-        client = worker_genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                worker_genai.types.Part.from_bytes(
-                    data=pdf_bytes,
-                    mime_type="application/pdf"
-                ),
-                prompt
-            ],
-            config=worker_genai.types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=MAX_OUTPUT_TOKENS,
-            )
-        )
-
-        # Check for empty/blocked response
-        if response.text is None:
-            # Try to get more info about why
-            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
-                result_queue.put(('error', f"Response blocked: {response.prompt_feedback}"))
-            elif hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'finish_reason'):
-                    result_queue.put(('error', f"Empty response, finish_reason: {candidate.finish_reason}"))
-                else:
-                    result_queue.put(('error', "Empty response from Gemini (no text returned)"))
-            else:
-                result_queue.put(('error', "Empty response from Gemini (possibly safety filtered)"))
-            return
-
-        result_queue.put(('success', response.text))
-    except Exception as e:
-        result_queue.put(('error', str(e)))
-
-
 def _call_gemini_with_timeout(pdf_bytes: bytes, prompt: str, api_key: str, timeout: int) -> str:
-    """Call Gemini API with a real timeout using multiprocessing."""
-    # Use a queue to get results from the subprocess
-    result_queue = multiprocessing.Queue()
+    """Call Gemini API with native HTTP timeout."""
+    from google import genai
 
-    # Start the worker process
-    process = multiprocessing.Process(
-        target=_gemini_worker,
-        args=(pdf_bytes, prompt, api_key, result_queue)
+    # Configure client with HTTP timeout
+    http_options = genai.types.HttpOptions(timeout=timeout)
+    client = genai.Client(api_key=api_key, http_options=http_options)
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            genai.types.Part.from_bytes(
+                data=pdf_bytes,
+                mime_type="application/pdf"
+            ),
+            prompt
+        ],
+        config=genai.types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        )
     )
-    process.start()
 
-    # Wait for completion with timeout
-    process.join(timeout=timeout)
+    # Check for empty/blocked response
+    if response.text is None:
+        if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+            raise RuntimeError(f"Response blocked: {response.prompt_feedback}")
+        elif hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'finish_reason'):
+                raise RuntimeError(f"Empty response, finish_reason: {candidate.finish_reason}")
+            else:
+                raise RuntimeError("Empty response from Gemini (no text returned)")
+        else:
+            raise RuntimeError("Empty response from Gemini (possibly safety filtered)")
 
-    if process.is_alive():
-        # Process is still running - kill it!
-        print(f"    [TIMEOUT] Killing hung API call after {timeout}s")
-        process.terminate()
-        process.join(timeout=5)  # Give it 5s to terminate gracefully
-
-        if process.is_alive():
-            # Force kill if still alive
-            process.kill()
-            process.join(timeout=2)
-
-        raise TimeoutError(f"Gemini API call timed out after {timeout}s")
-
-    # Get result from queue
-    if result_queue.empty():
-        raise RuntimeError("Worker process died without returning a result")
-
-    status, data = result_queue.get()
-
-    if status == 'error':
-        raise RuntimeError(data)
-
-    return data
+    return response.text
 
 
 def ocr_pdf_chunk(
@@ -397,26 +353,30 @@ def ocr_pdf_chunk(
             result = _call_gemini_with_timeout(pdf_bytes, full_prompt, api_key, timeout)
             return clean_output(result)
 
-        except TimeoutError as e:
-            last_error = e
-            print(f"    [Timeout on attempt {attempt + 1}/{max_retries}]")
-
         except Exception as e:
             last_error = e
             error_str = str(e).lower()
+
+            # Check for timeout (httpx raises different timeout exceptions)
+            if 'timeout' in error_str or 'timed out' in error_str or isinstance(e, TimeoutError):
+                print(f"    [Timeout on attempt {attempt + 1}/{max_retries}]")
+                continue
 
             # Check for rate limiting
             if "rate" in error_str or "quota" in error_str or "429" in error_str:
                 wait_time = RETRY_BACKOFF_BASE ** (attempt + 2)
                 print(f"    [Rate limited, waiting {wait_time}s...]")
                 time.sleep(wait_time)
+                continue
+
             # Check for server errors (5xx)
-            elif "500" in error_str or "503" in error_str or "server" in error_str:
+            if "500" in error_str or "503" in error_str or "server" in error_str:
                 print(f"    [Server error on attempt {attempt + 1}/{max_retries}]")
-            else:
-                # Unknown error - don't retry
-                print(f"    [Non-retryable error: {error_str[:100]}]")
-                raise
+                continue
+
+            # Unknown error - don't retry
+            print(f"    [Non-retryable error: {error_str[:100]}]")
+            raise
 
     # All retries exhausted
     raise RuntimeError(f"OCR failed after {max_retries} attempts: {last_error}")
@@ -516,7 +476,10 @@ def smooth_boundary(api_key: str, chunk_a_tail: str, chunk_b_head: str, timeout:
     try:
         # Use a simple direct call since this is text-only (no PDF)
         from google import genai as smooth_genai
-        client = smooth_genai.Client(api_key=api_key)
+
+        # Add HTTP timeout for boundary smoothing
+        http_options = smooth_genai.types.HttpOptions(timeout=timeout)
+        client = smooth_genai.Client(api_key=api_key, http_options=http_options)
 
         response = client.models.generate_content(
             model=GEMINI_MODEL,
