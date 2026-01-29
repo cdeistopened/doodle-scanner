@@ -767,13 +767,27 @@ CONTINUATION CONTEXT:
             if progress_callback:
                 progress_callback(total_pages, total_pages, desc)
 
-        all_content = smooth_all_boundaries(api_key, all_content, boundary_progress)
+        try:
+            print(f"  [PHASE] Starting boundary smoothing ({len(all_content)-1} boundaries)...")
+            all_content = smooth_all_boundaries(api_key, all_content, boundary_progress)
+            print(f"  [PHASE] Boundary smoothing complete")
+        except Exception as e:
+            print(f"  [ERROR] Boundary smoothing failed: {e} - using unsmoothed chunks")
+            # Continue with unsmoothed content
 
     # Assemble final document
     if progress_callback:
         progress_callback(total_pages, total_pages, "Assembling document...")
 
-    final_content = assemble_document(all_content, pdf_info, analysis)
+    try:
+        print(f"  [PHASE] Assembling document...")
+        final_content = assemble_document(all_content, pdf_info, analysis)
+        print(f"  [PHASE] Assembly complete ({len(final_content):,} chars)")
+    except Exception as e:
+        print(f"  [ERROR] Assembly failed: {e}")
+        # Fallback: just concatenate chunks
+        final_content = "\n\n---\n\n".join(all_content)
+        print(f"  [FALLBACK] Using simple concatenation ({len(final_content):,} chars)")
 
     # Save output
     if output_path is None:
@@ -782,9 +796,15 @@ CONTINUATION CONTEXT:
     else:
         output_path = Path(output_path)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        f.write(final_content)
+    try:
+        print(f"  [PHASE] Saving to {output_path}...")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            f.write(final_content)
+        print(f"  [PHASE] Save complete")
+    except Exception as e:
+        print(f"  [ERROR] Save failed: {e}")
+        raise
 
     # Calculate totals
     total_chars = sum(c.get("chars", 0) for c in chunk_results)
