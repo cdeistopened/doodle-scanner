@@ -2167,7 +2167,11 @@ def api_analyze_job(job_id):
 @app.route('/api/jobs/<job_id>/start', methods=['POST'])
 def api_start_job(job_id):
     """Start processing a PDF job with optional preferences."""
-    data = request.json or {}
+    # Handle requests with or without JSON body
+    try:
+        data = request.get_json(silent=True) or {}
+    except Exception:
+        data = {}
     preferences = data.get('preferences')
     success, error = pdf_manager.start_processing(job_id, preferences=preferences)
     if not success:

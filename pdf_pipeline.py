@@ -716,6 +716,17 @@ CONTINUATION CONTEXT:
             all_content.append(result)
             consecutive_failures = 0  # Reset on success
 
+            # Save intermediate chunk for debugging
+            if output_path:
+                chunks_dir = Path(output_path).parent / "chunks"
+                chunks_dir.mkdir(parents=True, exist_ok=True)
+                chunk_file = chunks_dir / f"{Path(output_path).stem}_chunk{chunk_num:02d}.md"
+                with open(chunk_file, "w") as f:
+                    f.write(f"<!-- Chunk {chunk_num}/{len(chunks)}: {page_range} -->\n")
+                    f.write(f"<!-- Processed in {elapsed:.1f}s, {len(result):,} chars -->\n\n")
+                    f.write(result)
+                print(f"    [SAVED] Chunk {chunk_num} -> {chunk_file.name}")
+
         except Exception as e:
             consecutive_failures += 1
             error_msg = str(e)
