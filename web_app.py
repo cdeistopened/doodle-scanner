@@ -122,7 +122,7 @@ class PageSnapDetector:
 class PageSnapApp:
     def __init__(self, camera_index: int = 0):
         self.config = Config()
-        self.detector = PageSnapDetector(self.config)
+        self.detector = PageSnapDetector(self.config) if CAMERA_AVAILABLE else None
         self.camera_index = camera_index
         self.cap = None
         self.detection_active = False
@@ -134,11 +134,22 @@ class PageSnapApp:
         self.last_capture_time = 0
         self.ocr_status = self._initial_ocr_status()
         self.ocr_thread: Optional[threading.Thread] = None
-        
+
         # Session setup
         self.session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.output_dir = os.path.join(os.path.dirname(__file__), "sessions", self.session_name)
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def save_capture_from_bytes(self, image_bytes: bytes) -> str:
+        """Save a capture from browser-submitted image bytes."""
+        self.capture_count += 1
+        filename = f"{self.session_name}_{self.capture_count:04d}.jpg"
+        filepath = os.path.join(self.output_dir, filename)
+        with open(filepath, 'wb') as f:
+            f.write(image_bytes)
+        self.last_capture_time = time.time()
+        print(f"Captured (browser): {filename}")
+        return filename
 
     def _initial_ocr_status(self):
         return {
@@ -307,8 +318,8 @@ class PageSnapApp:
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
 
-# Only initialize camera app if OpenCV is available
-page_snap = PageSnapApp(camera_index=0) if CAMERA_AVAILABLE else None
+# Initialize camera app - works in browser mode even without OpenCV
+page_snap = PageSnapApp(camera_index=0)
 
 
 # ============================================================================
@@ -1238,6 +1249,674 @@ UPLOAD_PAGE = '''
 '''
 
 
+BROWSER_CAMERA_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Scan - Doodle Scanner</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --cream: #faf8f4;
+            --cream-warm: #f5f0e8;
+            --ink: #2c2c2c;
+            --ink-soft: #555;
+            --ink-muted: #888;
+            --accent: #4f46e5;
+            --success: #16a34a;
+            --error: #dc2626;
+            --border: #e5e0d8;
+            --surface: #fff;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--cream);
+            color: var(--ink);
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 24px 20px;
+        }
+        .back-link {
+            display: inline-block;
+            color: var(--ink-muted);
+            text-decoration: none;
+            margin-bottom: 16px;
+            font-weight: 500;
+        }
+        .back-link:hover { text-decoration: underline; }
+        h1 {
+            font-family: 'Cormorant Garamond', Georgia, serif;
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+        .subtitle { color: var(--ink-muted); margin-bottom: 24px; }
+        .scanner-frame {
+            background: var(--surface);
+            border: 2px solid var(--ink);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 6px 6px 0 var(--ink);
+        }
+        .camera-area {
+            background: #1a1a1a;
+            position: relative;
+        }
+        #camera-video {
+            width: 100%;
+            display: block;
+            transform: scaleX(1);
+        }
+        .status-bar {
+            position: absolute;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(0,0,0,0.8);
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status-text {
+            color: #888;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status-text.scanning { color: #4ade80; }
+        .status-text.turning { color: #fbbf24; }
+        .status-text.processing { color: #60a5fa; }
+        .status-text.error { color: #f87171; }
+        .page-count {
+            color: white;
+            font-size: 20px;
+            font-weight: 700;
+            font-family: 'SF Mono', ui-monospace, monospace;
+        }
+        .motion-bar {
+            position: absolute;
+            top: 16px; right: 16px;
+            width: 4px; height: 60px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .motion-level {
+            position: absolute;
+            bottom: 0; width: 100%;
+            background: #4ade80;
+            border-radius: 2px;
+            transition: height 0.2s;
+        }
+        .motion-level.high { background: #fbbf24; }
+        .controls-area {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+        .main-button {
+            width: 100%;
+            max-width: 320px;
+            padding: 18px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            border: 2px solid var(--ink);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: 'Inter', sans-serif;
+            box-shadow: 3px 3px 0 var(--ink);
+        }
+        .main-button:hover:not(:disabled) {
+            transform: translate(-2px, -2px);
+            box-shadow: 5px 5px 0 var(--ink);
+        }
+        .main-button:active:not(:disabled) {
+            transform: translate(2px, 2px);
+            box-shadow: 1px 1px 0 var(--ink);
+        }
+        .main-button:disabled { cursor: wait; opacity: 0.7; }
+        .btn-start { background: var(--accent); color: white; }
+        .btn-stop { background: var(--error); color: white; }
+        .btn-processing { background: var(--ink-muted); color: white; }
+        .btn-done { background: var(--success); color: white; }
+        .secondary-actions {
+            display: flex;
+            gap: 16px;
+            font-size: 14px;
+        }
+        .secondary-actions a {
+            color: var(--ink-muted);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .secondary-actions a:hover { color: var(--accent); }
+        .settings-panel {
+            display: none;
+            background: var(--cream-warm);
+            padding: 20px 24px;
+            border-top: 1px solid var(--border);
+        }
+        .settings-panel.visible { display: block; }
+        .settings-panel h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--ink-soft);
+        }
+        .setting-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .setting-row label { width: 120px; font-size: 13px; }
+        .setting-row input[type="range"] {
+            flex: 1; margin: 0 12px;
+            accent-color: var(--accent);
+        }
+        .setting-row .value {
+            width: 40px; font-size: 13px;
+            font-weight: 600; text-align: right;
+        }
+        .results-panel {
+            display: none;
+            padding: 24px;
+            text-align: center;
+        }
+        .results-panel.visible { display: block; }
+        .results-icon { font-size: 48px; margin-bottom: 12px; }
+        .results-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+        .results-meta { color: var(--ink-muted); font-size: 14px; margin-bottom: 20px; }
+        .results-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .results-btn {
+            padding: 10px 20px;
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            background: var(--surface);
+        }
+        .results-btn:hover { background: var(--cream); }
+        .results-btn.primary {
+            background: var(--accent); color: white; border-color: var(--accent);
+        }
+        .results-btn.primary:hover { opacity: 0.9; }
+        #capture-flash {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(79, 70, 229, 0.3);
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .camera-error {
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--ink-muted);
+        }
+        .camera-error h2 { margin-bottom: 12px; color: var(--error); }
+        .camera-error p { margin-bottom: 8px; }
+        #session-name, #output-dir { display: none; }
+        .manual-capture-btn {
+            position: absolute;
+            bottom: 60px; left: 50%;
+            transform: translateX(-50%);
+            width: 56px; height: 56px;
+            border-radius: 50%;
+            border: 3px solid white;
+            background: rgba(255,255,255,0.2);
+            cursor: pointer;
+            z-index: 10;
+            transition: all 0.15s;
+        }
+        .manual-capture-btn:hover { background: rgba(255,255,255,0.4); }
+        .manual-capture-btn:active { transform: translateX(-50%) scale(0.9); }
+        .manual-capture-btn.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="capture-flash"></div>
+
+    <span id="session-name">{{ session_name }}</span>
+    <span id="output-dir">{{ output_dir }}</span>
+
+    <div class="container">
+        <a href="/" class="back-link">&larr; Back to Doodle Scanner</a>
+        <h1>Camera Scan</h1>
+        <p class="subtitle">Position camera over your book and flip pages</p>
+
+        <div class="scanner-frame">
+            <div class="camera-area" id="camera-area">
+                <video id="camera-video" autoplay playsinline muted></video>
+                <canvas id="detect-canvas" style="display:none"></canvas>
+                <canvas id="capture-canvas" style="display:none"></canvas>
+
+                <button class="manual-capture-btn hidden" id="manual-capture-btn"
+                        onclick="manualCapture()" title="Manual capture"></button>
+
+                <div class="motion-bar">
+                    <div class="motion-level" id="motion-level" style="height: 20%"></div>
+                </div>
+
+                <div class="status-bar">
+                    <span class="status-text" id="status-text">Requesting camera...</span>
+                    <span class="page-count" id="page-count">0 pages</span>
+                </div>
+            </div>
+
+            <div class="controls-area" id="controls-area">
+                <button class="main-button btn-start" id="main-button" onclick="handleMainButton()" disabled>
+                    Start Scanning
+                </button>
+                <div class="secondary-actions">
+                    <a href="#" onclick="toggleSettings(); return false;">Settings</a>
+                    <a href="#" onclick="newSession(); return false;">+ New Session</a>
+                </div>
+            </div>
+
+            <div class="settings-panel" id="settings-panel">
+                <h3>Settings</h3>
+                <div class="setting-row">
+                    <label>Sensitivity</label>
+                    <input type="range" id="sensitivity" min="1" max="10" value="5"
+                           oninput="updateSensitivity(this.value)">
+                    <span class="value" id="sensitivity-val">5</span>
+                </div>
+                <div class="setting-row">
+                    <label>Capture Delay</label>
+                    <input type="range" id="stability-delay" min="0.3" max="3" step="0.1" value="1.0"
+                           oninput="updateDelay(this.value)">
+                    <span class="value" id="stability-delay-val">1.0s</span>
+                </div>
+            </div>
+
+            <div class="results-panel" id="results-panel">
+                <div class="results-icon">&#10003;</div>
+                <div class="results-title" id="results-title">OCR Complete</div>
+                <div class="results-meta" id="results-meta">0 pages processed</div>
+                <div class="results-actions">
+                    <button class="results-btn" onclick="scanMore()">Scan More</button>
+                    <a class="results-btn primary" id="download-link" href="#" target="_blank">Download Markdown</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ===== State =====
+    let appState = 'idle';
+    let captureCount = 0;
+    let ocrOutputUrl = null;
+    let cameraStream = null;
+    let detecting = false;
+    let animFrameId = null;
+
+    // Motion detection state (mirrors Python PageSnapDetector)
+    const STATES = { IDLE: 0, TURNING: 1, STABILIZING: 2, CAPTURING: 3, COOLDOWN: 4 };
+    const STATE_NAMES = ['Monitoring...', 'Page turning...', 'Stabilizing...', 'Captured!', 'Cooldown...'];
+    let motionState = STATES.IDLE;
+    let prevGray = null;
+    let stabilityStart = null;
+    let cooldownStart = null;
+    let lastDelta = 0;
+
+    // Config (mirrors Python Config)
+    let config = {
+        motionThreshold: 3.0,
+        stabilityThreshold: 1.0,
+        stabilityDelay: 1.0,
+        cooldownPeriod: 2.0,
+        detectionScale: 0.25,
+    };
+
+    const video = document.getElementById('camera-video');
+    const detectCanvas = document.getElementById('detect-canvas');
+    const captureCanvas = document.getElementById('capture-canvas');
+    const detectCtx = detectCanvas.getContext('2d', { willReadFrequently: true });
+    const captureCtx = captureCanvas.getContext('2d');
+
+    // ===== Camera Setup =====
+    async function startCamera() {
+        try {
+            const constraints = {
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                }
+            };
+            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = cameraStream;
+            await video.play();
+
+            // Set capture canvas to full video resolution
+            video.addEventListener('loadedmetadata', () => {
+                captureCanvas.width = video.videoWidth;
+                captureCanvas.height = video.videoHeight;
+                // Detection canvas is scaled down
+                detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
+                detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
+            });
+
+            document.getElementById('status-text').textContent = 'Ready to scan';
+            document.getElementById('main-button').disabled = false;
+        } catch (err) {
+            const area = document.getElementById('camera-area');
+            area.innerHTML = '<div class="camera-error">' +
+                '<h2>Camera Access Denied</h2>' +
+                '<p>Please allow camera access in your browser settings.</p>' +
+                '<p style="font-size:13px;color:#aaa;">' + err.message + '</p></div>';
+        }
+    }
+
+    // ===== Motion Detection (runs in requestAnimationFrame) =====
+    function toGrayscale(imageData) {
+        const data = imageData.data;
+        const gray = new Float32Array(imageData.width * imageData.height);
+        for (let i = 0; i < gray.length; i++) {
+            const j = i * 4;
+            gray[i] = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114;
+        }
+        return gray;
+    }
+
+    function meanAbsDiff(a, b) {
+        let sum = 0;
+        for (let i = 0; i < a.length; i++) {
+            sum += Math.abs(a[i] - b[i]);
+        }
+        return sum / a.length;
+    }
+
+    function detectionLoop() {
+        if (!detecting) return;
+
+        // Draw scaled-down frame for detection
+        detectCtx.drawImage(video, 0, 0, detectCanvas.width, detectCanvas.height);
+        const imageData = detectCtx.getImageData(0, 0, detectCanvas.width, detectCanvas.height);
+        const gray = toGrayscale(imageData);
+
+        if (prevGray && prevGray.length === gray.length) {
+            lastDelta = meanAbsDiff(gray, prevGray);
+            const now = performance.now() / 1000;
+
+            // State machine (mirrors Python PageSnapDetector.process_frame)
+            let shouldCapture = false;
+
+            if (motionState === STATES.IDLE) {
+                if (lastDelta > config.motionThreshold) {
+                    motionState = STATES.TURNING;
+                }
+            } else if (motionState === STATES.TURNING) {
+                if (lastDelta < config.stabilityThreshold) {
+                    motionState = STATES.STABILIZING;
+                    stabilityStart = now;
+                }
+            } else if (motionState === STATES.STABILIZING) {
+                if (lastDelta > config.stabilityThreshold) {
+                    motionState = STATES.TURNING;
+                } else if (stabilityStart && (now - stabilityStart) >= config.stabilityDelay) {
+                    motionState = STATES.CAPTURING;
+                    shouldCapture = true;
+                    cooldownStart = now;
+                }
+            } else if (motionState === STATES.CAPTURING) {
+                motionState = STATES.COOLDOWN;
+            } else if (motionState === STATES.COOLDOWN) {
+                if (cooldownStart && (now - cooldownStart) >= config.cooldownPeriod) {
+                    motionState = STATES.IDLE;
+                }
+            }
+
+            if (shouldCapture) {
+                captureFrame();
+            }
+
+            // Update UI
+            updateMotionUI();
+        }
+
+        prevGray = gray;
+        animFrameId = requestAnimationFrame(detectionLoop);
+    }
+
+    function updateMotionUI() {
+        const motionLevel = document.getElementById('motion-level');
+        const normalized = Math.min(100, (lastDelta / 10) * 100);
+        motionLevel.style.height = normalized + '%';
+        motionLevel.classList.toggle('high', lastDelta > config.motionThreshold);
+
+        const statusText = document.getElementById('status-text');
+        if (appState === 'scanning') {
+            if (motionState === STATES.TURNING) {
+                statusText.textContent = 'Page turning...';
+                statusText.className = 'status-text turning';
+            } else if (motionState === STATES.STABILIZING) {
+                statusText.textContent = 'Stabilizing...';
+                statusText.className = 'status-text turning';
+            } else if (motionState === STATES.CAPTURING) {
+                statusText.textContent = 'Captured!';
+                statusText.className = 'status-text scanning';
+            } else {
+                statusText.textContent = 'Scanning...';
+                statusText.className = 'status-text scanning';
+            }
+        }
+    }
+
+    // ===== Capture =====
+    function captureFrame() {
+        // Draw full-res frame to capture canvas
+        captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+        const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.90);
+
+        // Flash effect
+        const flash = document.getElementById('capture-flash');
+        flash.style.display = 'block';
+        setTimeout(() => flash.style.display = 'none', 200);
+
+        // Send to server
+        fetch('/api/capture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataUrl })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                captureCount = data.capture_count;
+                document.getElementById('page-count').textContent =
+                    captureCount + ' page' + (captureCount !== 1 ? 's' : '');
+            }
+        })
+        .catch(err => console.error('Capture failed:', err));
+    }
+
+    function manualCapture() {
+        captureFrame();
+    }
+
+    // ===== App State Machine =====
+    function handleMainButton() {
+        switch (appState) {
+            case 'idle': startScanning(); break;
+            case 'scanning': stopAndProcess(); break;
+            case 'done': scanMore(); break;
+        }
+    }
+
+    function startScanning() {
+        detecting = true;
+        motionState = STATES.IDLE;
+        prevGray = null;
+        stabilityStart = null;
+        cooldownStart = null;
+        setAppState('scanning');
+        document.getElementById('manual-capture-btn').classList.remove('hidden');
+        animFrameId = requestAnimationFrame(detectionLoop);
+    }
+
+    function stopAndProcess() {
+        detecting = false;
+        document.getElementById('manual-capture-btn').classList.add('hidden');
+        if (animFrameId) cancelAnimationFrame(animFrameId);
+
+        if (captureCount > 0) {
+            setAppState('processing');
+            runOCR();
+        } else {
+            setAppState('idle');
+        }
+    }
+
+    function runOCR() {
+        const sessionName = document.getElementById('session-name').textContent;
+        fetch('/run_ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: sessionName })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('status-text').textContent = 'OCR Error: ' + data.error;
+                document.getElementById('status-text').className = 'status-text error';
+                setAppState('idle');
+            }
+            // OCR started - polling will track progress
+        })
+        .catch(() => {
+            document.getElementById('status-text').textContent = 'OCR failed';
+            document.getElementById('status-text').className = 'status-text error';
+            setAppState('idle');
+        });
+    }
+
+    function scanMore() {
+        fetch('/new_session', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('session-name').textContent = data.session_name;
+                document.getElementById('output-dir').textContent = data.output_dir;
+                captureCount = 0;
+                ocrOutputUrl = null;
+                document.getElementById('page-count').textContent = '0 pages';
+                setAppState('idle');
+            });
+    }
+
+    function newSession() {
+        if (detecting) {
+            detecting = false;
+            if (animFrameId) cancelAnimationFrame(animFrameId);
+            document.getElementById('manual-capture-btn').classList.add('hidden');
+        }
+        scanMore();
+    }
+
+    function setAppState(state) {
+        appState = state;
+        const btn = document.getElementById('main-button');
+        const controlsArea = document.getElementById('controls-area');
+        const resultsPanel = document.getElementById('results-panel');
+        const statusText = document.getElementById('status-text');
+
+        controlsArea.style.display = 'flex';
+        resultsPanel.classList.remove('visible');
+        btn.disabled = false;
+
+        switch (state) {
+            case 'idle':
+                btn.className = 'main-button btn-start';
+                btn.textContent = 'Start Scanning';
+                statusText.textContent = 'Ready to scan';
+                statusText.className = 'status-text';
+                break;
+            case 'scanning':
+                btn.className = 'main-button btn-stop';
+                btn.textContent = 'Stop & Process';
+                statusText.textContent = 'Scanning...';
+                statusText.className = 'status-text scanning';
+                break;
+            case 'processing':
+                btn.className = 'main-button btn-processing';
+                btn.textContent = 'Processing OCR...';
+                btn.disabled = true;
+                statusText.textContent = 'Running OCR...';
+                statusText.className = 'status-text processing';
+                break;
+            case 'done':
+                controlsArea.style.display = 'none';
+                resultsPanel.classList.add('visible');
+                statusText.textContent = 'Complete';
+                statusText.className = 'status-text';
+                document.getElementById('results-meta').textContent = captureCount + ' pages processed';
+                if (ocrOutputUrl) {
+                    document.getElementById('download-link').href = ocrOutputUrl;
+                }
+                break;
+        }
+    }
+
+    // ===== Settings =====
+    function toggleSettings() {
+        document.getElementById('settings-panel').classList.toggle('visible');
+    }
+
+    function updateSensitivity(value) {
+        document.getElementById('sensitivity-val').textContent = value;
+        config.motionThreshold = 11 - value;
+        config.stabilityThreshold = 2.2 - (value * 0.2);
+    }
+
+    function updateDelay(value) {
+        document.getElementById('stability-delay-val').textContent = value + 's';
+        config.stabilityDelay = parseFloat(value);
+    }
+
+    // ===== OCR Status Polling =====
+    setInterval(() => {
+        if (appState !== 'processing') return;
+        fetch('/status')
+            .then(r => r.json())
+            .then(data => {
+                if (data.ocr) {
+                    if (data.ocr.state === 'running') {
+                        const total = data.ocr.total || 0;
+                        const completed = data.ocr.completed || 0;
+                        if (total > 0) {
+                            document.getElementById('status-text').textContent =
+                                'OCR: ' + completed + '/' + total + ' pages...';
+                        }
+                    } else if (data.ocr.state === 'complete') {
+                        ocrOutputUrl = data.ocr.output_url;
+                        setAppState('done');
+                    } else if (data.ocr.state === 'error') {
+                        document.getElementById('status-text').textContent =
+                            'OCR Error: ' + (data.ocr.error || 'Unknown');
+                        document.getElementById('status-text').className = 'status-text error';
+                        setAppState('idle');
+                    }
+                }
+            });
+    }, 1000);
+
+    // ===== Init =====
+    startCamera();
+    </script>
+</body>
+</html>
+'''
+
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -1873,20 +2552,39 @@ def upload_page():
 
 @app.route('/camera')
 def camera_page():
-    """Camera scanning page (PageSnap)."""
-    if not CAMERA_AVAILABLE:
-        return render_template_string('''
-        <!DOCTYPE html><html><head><title>Camera Not Available</title></head>
-        <body style="font-family: sans-serif; padding: 40px; text-align: center;">
-            <h1>Camera Mode Not Available</h1>
-            <p>Camera scanning requires OpenCV which is only available when running locally.</p>
-            <p><a href="/upload">Use PDF Upload instead →</a></p>
-        </body></html>
-        ''')
-    return render_template_string(HTML_TEMPLATE,
+    """Camera scanning page (PageSnap) - uses browser webcam."""
+    return render_template_string(BROWSER_CAMERA_TEMPLATE,
                                   session_name=page_snap.session_name,
-                                  output_dir=page_snap.output_dir,
-                                  current_camera=page_snap.camera_index)
+                                  output_dir=page_snap.output_dir)
+
+
+@app.route('/api/capture', methods=['POST'])
+def api_capture():
+    """Receive a captured frame from the browser webcam."""
+    import base64 as b64
+
+    data = request.json
+    if not data or 'image' not in data:
+        return jsonify({'error': 'No image data'}), 400
+
+    # Expect base64 data URL: "data:image/jpeg;base64,..."
+    image_data = data['image']
+    if ',' in image_data:
+        image_data = image_data.split(',', 1)[1]
+
+    try:
+        image_bytes = b64.b64decode(image_data)
+    except Exception:
+        return jsonify({'error': 'Invalid base64 image'}), 400
+
+    with page_snap.lock:
+        filename = page_snap.save_capture_from_bytes(image_bytes)
+
+    return jsonify({
+        'ok': True,
+        'filename': filename,
+        'capture_count': page_snap.capture_count
+    })
 
 
 @app.route('/list_cameras')
@@ -1906,6 +2604,8 @@ def list_cameras():
 
 @app.route('/set_camera', methods=['POST'])
 def set_camera():
+    if not CAMERA_AVAILABLE:
+        return jsonify({'error': 'OpenCV not available'}), 400
     data = request.json
     new_index = int(data['camera'])
     with page_snap.lock:
@@ -1914,12 +2614,15 @@ def set_camera():
             page_snap.cap.release()
             page_snap.cap = None
         page_snap.camera_index = new_index
-        page_snap.detector.reset()
+        if page_snap.detector:
+            page_snap.detector.reset()
     return jsonify({'ok': True, 'camera': new_index})
 
 
 @app.route('/video_feed')
 def video_feed():
+    if not CAMERA_AVAILABLE or not page_snap:
+        return jsonify({'error': 'Camera not available on server'}), 400
     return Response(page_snap.generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
@@ -1928,9 +2631,9 @@ def video_feed():
 def toggle_detection():
     with page_snap.lock:
         page_snap.detection_active = not page_snap.detection_active
-        if page_snap.detection_active:
+        if page_snap.detection_active and page_snap.detector:
             page_snap.detector.reset()
-            page_snap.reset_ocr_status()  # Clear stale OCR status when starting
+            page_snap.reset_ocr_status()
     return jsonify({'active': page_snap.detection_active})
 
 
@@ -1952,12 +2655,13 @@ def clear_roi():
 @app.route('/new_session', methods=['POST'])
 def new_session():
     with page_snap.lock:
-        page_snap.detection_active = False  # Stop detection
+        page_snap.detection_active = False
         page_snap.session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
         page_snap.output_dir = os.path.join(os.path.dirname(__file__), "sessions", page_snap.session_name)
         os.makedirs(page_snap.output_dir, exist_ok=True)
         page_snap.capture_count = 0
-        page_snap.detector.reset()
+        if page_snap.detector:
+            page_snap.detector.reset()
         page_snap.reset_ocr_status()
     return jsonify({'session_name': page_snap.session_name, 'output_dir': page_snap.output_dir, 'detection_stopped': True})
 
@@ -1967,7 +2671,8 @@ def update_setting():
     data = request.json
     with page_snap.lock:
         setattr(page_snap.config, data['name'], data['value'])
-        page_snap.detector.config = page_snap.config
+        if page_snap.detector:
+            page_snap.detector.config = page_snap.config
     return jsonify({'ok': True})
 
 
@@ -1977,8 +2682,12 @@ def status():
         ocr_status = dict(page_snap.ocr_status)
         capture_count = page_snap.capture_count
         detection_active = page_snap.detection_active
-        state_value = page_snap.detector.state.value
-        last_delta = round(page_snap.detector.last_delta, 1)
+        if page_snap.detector:
+            state_value = page_snap.detector.state.value
+            last_delta = round(page_snap.detector.last_delta, 1)
+        else:
+            state_value = "browser"
+            last_delta = 0.0
         motion_threshold = page_snap.config.motion_threshold
         stability_threshold = page_snap.config.stability_threshold
 
@@ -2229,11 +2938,11 @@ if __name__ == '__main__':
 
     print(f"\nDoodle Scanner")
     print(f"==============")
-    if CAMERA_AVAILABLE and page_snap:
+    if CAMERA_AVAILABLE:
         page_snap.camera_index = args.camera
-        print(f"Camera: {args.camera}")
+        print(f"Camera: {args.camera} (local OpenCV + browser)")
     else:
-        print("Camera: Not available (PDF upload only)")
+        print("Camera: Browser webcam (getUserMedia)")
     print(f"Port: {args.port}")
     if args.port == 5001:
         print(f"Open http://localhost:{args.port} in your browser")
