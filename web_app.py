@@ -2103,12 +2103,12 @@ BROWSER_CAMERA_TEMPLATE = '''
             .then(data => {
                 if (data.ocr) {
                     if (data.ocr.state === 'running') {
+                        const desc = data.ocr.current_page || 'Processing...';
                         const total = data.ocr.total || 0;
                         const completed = data.ocr.completed || 0;
-                        if (total > 0) {
-                            document.getElementById('status-text').textContent =
-                                'OCR: ' + completed + '/' + total + ' pages...';
-                        }
+                        const pct = total > 0 ? Math.round(completed / total * 100) : 0;
+                        document.getElementById('status-text').textContent =
+                            desc + (pct > 0 ? ' (' + pct + '%)' : '');
                     } else if (data.ocr.state === 'complete') {
                         ocrOutputUrl = data.ocr.output_url;
                         setAppState('done');
@@ -2721,12 +2721,12 @@ HTML_TEMPLATE = '''
                     // Handle OCR status
                     if (data.ocr) {
                         if (data.ocr.state === 'running' && appState === 'processing') {
+                            const desc = data.ocr.current_page || 'Processing...';
                             const total = data.ocr.total || 0;
                             const completed = data.ocr.completed || 0;
-                            if (total > 0) {
-                                document.getElementById('status-text').textContent =
-                                    `OCR: ${completed}/${total} pages...`;
-                            }
+                            const pct = total > 0 ? Math.round(completed / total * 100) : 0;
+                            document.getElementById('status-text').textContent =
+                                desc + (pct > 0 ? ` (${pct}%)` : '');
                         } else if (data.ocr.state === 'complete') {
                             if (appState === 'processing') {
                                 ocrOutputUrl = data.ocr.output_url;
