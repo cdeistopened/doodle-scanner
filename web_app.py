@@ -1740,10 +1740,17 @@ BROWSER_CAMERA_TEMPLATE = '''
         .camera-error {
             padding: 40px 20px;
             text-align: center;
-            color: var(--ink-muted);
+            color: var(--ink-soft);
+            line-height: 1.5;
         }
-        .camera-error h2 { margin-bottom: 12px; color: var(--error); }
-        .camera-error p { margin-bottom: 8px; }
+        .camera-error h2 { margin-bottom: 12px; color: var(--error); font-family: 'Cormorant Garamond', serif; }
+        .camera-error p { margin-bottom: 8px; font-size: 14px; }
+        .camera-error code {
+            background: var(--cream-warm);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
         #session-name, #output-dir { display: none; }
         .manual-capture-btn {
             position: absolute;
@@ -1929,6 +1936,28 @@ BROWSER_CAMERA_TEMPLATE = '''
 
     // ===== Camera Setup =====
     async function startCamera() {
+        const statusText = document.getElementById('status-text');
+        const area = document.getElementById('camera-area');
+
+        // Pre-check: getUserMedia requires HTTPS (or localhost)
+        const isSecure = location.protocol === 'https:' ||
+                         location.hostname === 'localhost' ||
+                         location.hostname === '127.0.0.1';
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            area.innerHTML = '<div class="camera-error">' +
+                '<h2>Camera Not Available</h2>' +
+                (isSecure
+                    ? '<p>Your browser does not support camera access.</p>'
+                    : '<p>Camera requires <strong>HTTPS</strong> or <strong>localhost</strong>.</p>' +
+                      '<p style="margin-top:8px">You\'re on: <code>' + location.origin + '</code></p>' +
+                      '<p style="margin-top:8px;font-size:13px;color:var(--ink-muted)">Run locally with: <code>python web_app.py</code> then open <code>http://localhost:5001/camera</code></p>') +
+                '</div>';
+            return;
+        }
+
+        statusText.textContent = 'Requesting camera access...';
+
         try {
             const constraints = {
                 video: {
@@ -1954,14 +1983,27 @@ BROWSER_CAMERA_TEMPLATE = '''
                 updateBoundingBox();
             });
 
-            document.getElementById('status-text').textContent = 'Ready to scan';
+            statusText.textContent = 'Ready to scan';
             document.getElementById('main-button').disabled = false;
         } catch (err) {
-            const area = document.getElementById('camera-area');
-            area.innerHTML = '<div class="camera-error">' +
-                '<h2>Camera Access Denied</h2>' +
-                '<p>Please allow camera access in your browser settings.</p>' +
-                '<p style="font-size:13px;color:#aaa;">' + err.message + '</p></div>';
+            let msg = '';
+            if (err.name === 'NotAllowedError') {
+                msg = '<h2>Camera Access Denied</h2>' +
+                    '<p>Please allow camera access in your browser settings.</p>' +
+                    '<p style="font-size:13px;color:var(--ink-muted)">On iOS: Settings → Safari → Camera → Allow</p>' +
+                    '<p style="font-size:13px;color:var(--ink-muted)">On Chrome: tap the lock icon in the address bar → Camera → Allow</p>';
+            } else if (err.name === 'NotFoundError') {
+                msg = '<h2>No Camera Found</h2>' +
+                    '<p>No camera detected on this device.</p>';
+            } else if (err.name === 'NotReadableError') {
+                msg = '<h2>Camera In Use</h2>' +
+                    '<p>Camera is being used by another app. Close it and try again.</p>';
+            } else {
+                msg = '<h2>Camera Error</h2>' +
+                    '<p>' + err.message + '</p>';
+            }
+            msg += '<p style="font-size:11px;color:#999;margin-top:12px">' + err.name + ': ' + err.message + '</p>';
+            area.innerHTML = '<div class="camera-error">' + msg + '</div>';
         }
     }
 
