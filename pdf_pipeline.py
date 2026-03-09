@@ -32,7 +32,7 @@ except ImportError:
 # Configuration
 GEMINI_MODEL = "gemini-3-flash-preview"
 MAX_OUTPUT_TOKENS = 64000
-DEFAULT_CHUNK_SIZE = 10
+DEFAULT_CHUNK_SIZE = 20
 
 # Robustness settings
 API_TIMEOUT_SECONDS = 120  # 2 minutes per chunk

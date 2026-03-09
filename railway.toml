@@ -3,6 +3,7 @@ builder = "nixpacks"
 
 [build.nixpacksPlan]
 providers = ["python"]
+aptPkgs = ["pandoc"]
 
 [deploy]
 startCommand = "python web_app.py --port $PORT"

@@ -177,7 +177,8 @@ class PageSnapApp:
         self.ocr_status = self._initial_ocr_status()
         self.ocr_thread = None
 
-    def _start_ocr_thread(self, session_name: str, session_path: str, images: list, models: list = None):
+    def _start_ocr_thread(self, session_name: str, session_path: str, images: list,
+                          models: list = None, preferences: dict = None):
         """Start OCR processing in a background thread.
 
         If multiple models are specified, runs OCR once per model with separate output files.
@@ -214,6 +215,7 @@ class PageSnapApp:
                         progress_callback=progress_callback,
                         exit_on_error=False,
                         model=model,
+                        preferences=preferences,
                     )
                     outputs.append(result_path)
 
@@ -262,7 +264,7 @@ class PageSnapApp:
         self.ocr_thread = threading.Thread(target=worker, daemon=True)
         self.ocr_thread.start()
 
-    def trigger_ocr(self, session_name: str, models: list = None):
+    def trigger_ocr(self, session_name: str, models: list = None, preferences: dict = None):
         """Validate and start OCR for a session if not already running."""
         session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
         if not os.path.exists(session_path):
@@ -276,7 +278,7 @@ class PageSnapApp:
             if self.ocr_status.get('state') == 'running':
                 return False, "OCR already running"
 
-        self._start_ocr_thread(session_name, session_path, images, models=models)
+        self._start_ocr_thread(session_name, session_path, images, models=models, preferences=preferences)
         return True, None
     
     def start_camera(self):
@@ -1584,30 +1586,97 @@ BROWSER_CAMERA_TEMPLATE = '''
             width: 40px; font-size: 13px;
             font-weight: 600; text-align: right;
         }
+        .slider-hints {
+            display: flex;
+            justify-content: space-between;
+            margin: -4px 0 8px 132px;
+            font-size: 11px;
+            color: var(--ink-muted);
+            padding-right: 52px;
+        }
         .results-panel {
             display: none;
             padding: 24px;
-            text-align: center;
         }
         .results-panel.visible { display: block; }
-        .results-icon { font-size: 48px; margin-bottom: 12px; }
+        .results-header {
+            text-align: center;
+            margin-bottom: 16px;
+        }
+        .results-icon { font-size: 48px; margin-bottom: 8px; }
         .results-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
-        .results-meta { color: var(--ink-muted); font-size: 14px; margin-bottom: 20px; }
-        .results-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .results-meta { color: var(--ink-muted); font-size: 14px; margin-bottom: 16px; }
+        .results-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
         .results-btn {
-            padding: 10px 20px;
+            padding: 8px 16px;
             border: 2px solid var(--border);
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 500;
             cursor: pointer;
             background: var(--surface);
+            text-decoration: none;
+            color: var(--ink);
         }
         .results-btn:hover { background: var(--cream); }
         .results-btn.primary {
             background: var(--accent); color: white; border-color: var(--accent);
         }
         .results-btn.primary:hover { opacity: 0.9; }
+        .preview-toggle {
+            display: flex;
+            gap: 0;
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .preview-toggle button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            background: var(--surface);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--ink-muted);
+        }
+        .preview-toggle button.active {
+            background: var(--accent);
+            color: white;
+        }
+        .preview-container {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            text-align: left;
+        }
+        .preview-container pre {
+            padding: 16px;
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'SF Mono', ui-monospace, monospace;
+            margin: 0;
+        }
+        .preview-container .rendered {
+            padding: 20px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .preview-container .rendered h1 { font-size: 24px; margin: 16px 0 8px; font-family: 'Cormorant Garamond', serif; }
+        .preview-container .rendered h2 { font-size: 20px; margin: 14px 0 6px; font-family: 'Cormorant Garamond', serif; }
+        .preview-container .rendered h3 { font-size: 16px; margin: 12px 0 4px; }
+        .preview-container .rendered p { margin: 0 0 10px; }
+        .preview-container .rendered blockquote {
+            border-left: 3px solid var(--border);
+            padding-left: 12px;
+            color: var(--ink-soft);
+            margin: 8px 0;
+        }
         #capture-flash {
             display: none;
             position: fixed;
@@ -1746,11 +1815,19 @@ BROWSER_CAMERA_TEMPLATE = '''
                            oninput="updateSensitivity(this.value)">
                     <span class="value" id="sensitivity-val">5</span>
                 </div>
+                <div class="slider-hints">
+                    <span>Thick pages / slow turns</span>
+                    <span>Thin pages / quick turns</span>
+                </div>
                 <div class="setting-row">
                     <label>Capture Delay</label>
                     <input type="range" id="stability-delay" min="0.3" max="3" step="0.1" value="1.0"
                            oninput="updateDelay(this.value)">
                     <span class="value" id="stability-delay-val">1.0s</span>
+                </div>
+                <div class="slider-hints">
+                    <span>Snap faster</span>
+                    <span>More settling time</span>
                 </div>
                 <div class="setting-row" style="flex-direction:column; align-items:flex-start">
                     <label style="width:auto; margin-bottom:6px">Book Size Guide</label>
@@ -1762,6 +1839,13 @@ BROWSER_CAMERA_TEMPLATE = '''
                         <button class="preset-btn" onclick="setBookPreset('letter')">Letter</button>
                         <button class="preset-btn" onclick="setBookPreset('square')">Square</button>
                     </div>
+                </div>
+                <div class="setting-row" style="margin-top: 8px">
+                    <label style="width: auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                        <input type="checkbox" id="pref-page-numbers">
+                        <span style="font-size:13px">Preserve page numbers</span>
+                        <span style="font-size:11px; color:var(--ink-muted)">(hidden comments in markdown)</span>
+                    </label>
                 </div>
                 <div class="setting-row" style="flex-direction:column; align-items:flex-start">
                     <label style="width:auto; margin-bottom:6px">OCR Models (multi-select for comparison)</label>
@@ -1787,12 +1871,24 @@ BROWSER_CAMERA_TEMPLATE = '''
             </div>
 
             <div class="results-panel" id="results-panel">
-                <div class="results-icon">&#10003;</div>
-                <div class="results-title" id="results-title">OCR Complete</div>
-                <div class="results-meta" id="results-meta">0 pages processed</div>
+                <div class="results-header">
+                    <div class="results-icon">&#10003;</div>
+                    <div class="results-title" id="results-title">OCR Complete</div>
+                    <div class="results-meta" id="results-meta">0 pages processed</div>
+                </div>
                 <div class="results-actions">
                     <button class="results-btn" onclick="scanMore()">Scan More</button>
-                    <a class="results-btn primary" id="download-link" href="#" target="_blank">Download Markdown</a>
+                    <a class="results-btn primary" id="download-link" href="#" download>Download .md</a>
+                    <button class="results-btn" onclick="exportDocx()">Export .docx</button>
+                    <button class="results-btn" onclick="exportNotion()">Export to Notion</button>
+                </div>
+                <div class="preview-toggle">
+                    <button class="active" onclick="setPreviewMode('rendered', this)">Preview</button>
+                    <button onclick="setPreviewMode('raw', this)">Raw Markdown</button>
+                </div>
+                <div class="preview-container" id="preview-container">
+                    <div class="rendered" id="preview-rendered">Loading preview...</div>
+                    <pre id="preview-raw" style="display:none"></pre>
                 </div>
             </div>
         </div>
@@ -1821,7 +1917,7 @@ BROWSER_CAMERA_TEMPLATE = '''
         motionThreshold: 3.0,
         stabilityThreshold: 1.0,
         stabilityDelay: 1.0,
-        cooldownPeriod: 2.0,
+        cooldownPeriod: 1.0,
         detectionScale: 0.25,
     };
 
@@ -2081,10 +2177,13 @@ BROWSER_CAMERA_TEMPLATE = '''
             setAppState('idle');
             return;
         }
+        const preferences = {
+            include_page_numbers: document.getElementById('pref-page-numbers')?.checked || false,
+        };
         fetch('/run_ocr', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: sessionName, models: models })
+            body: JSON.stringify({ session: sessionName, models: models, preferences: preferences })
         })
         .then(r => r.json())
         .then(data => {
@@ -2113,6 +2212,65 @@ BROWSER_CAMERA_TEMPLATE = '''
                 document.getElementById('page-count').textContent = '0 pages';
                 setAppState('idle');
             });
+    }
+
+    // ===== Preview & Export =====
+    let rawMarkdown = '';
+
+    function loadPreview(url) {
+        fetch(url)
+            .then(r => r.text())
+            .then(md => {
+                rawMarkdown = md;
+                document.getElementById('preview-raw').textContent = md;
+                document.getElementById('preview-rendered').innerHTML = renderMarkdown(md);
+            });
+    }
+
+    function renderMarkdown(md) {
+        // Lightweight markdown to HTML (covers the essentials)
+        let html = md
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+            .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+            .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>')
+            .replace(/^\&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
+            .replace(/^---$/gm, '<hr>')
+            .replace(/\[\^(\d+)\]/g, '<sup>[$1]</sup>')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/<!-- page (\d+) -->/g, '<span style="color:var(--ink-muted);font-size:11px;float:right">[p.$1]</span>');
+        return '<p>' + html + '</p>';
+    }
+
+    function setPreviewMode(mode, btn) {
+        document.querySelectorAll('.preview-toggle button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('preview-rendered').style.display = mode === 'rendered' ? 'block' : 'none';
+        document.getElementById('preview-raw').style.display = mode === 'raw' ? 'block' : 'none';
+    }
+
+    function exportDocx() {
+        const session = document.getElementById('session-name').textContent;
+        window.open('/export_docx/' + session);
+    }
+
+    function exportNotion() {
+        const session = document.getElementById('session-name').textContent;
+        fetch('/export_notion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: session })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                alert('Notion export error: ' + data.error);
+            } else {
+                alert('Exported to Notion! Page: ' + (data.url || data.page_id));
+            }
+        });
     }
 
     function newSession() {
@@ -2163,6 +2321,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                 document.getElementById('results-meta').textContent = captureCount + ' pages processed';
                 if (ocrOutputUrl) {
                     document.getElementById('download-link').href = ocrOutputUrl;
+                    loadPreview(ocrOutputUrl);
                 }
                 break;
         }
@@ -2509,6 +2668,14 @@ HTML_TEMPLATE = '''
             border-radius: 4px;
             font-size: 13px;
         }
+        .slider-hints {
+            display: flex;
+            justify-content: space-between;
+            margin: -4px 0 8px 132px;
+            font-size: 11px;
+            color: var(--ink-muted);
+            padding-right: 52px;
+        }
         .setting-row .value {
             width: 40px;
             font-size: 13px;
@@ -2610,10 +2777,18 @@ HTML_TEMPLATE = '''
                     <input type="range" id="sensitivity" min="1" max="10" value="5" onchange="updateSensitivity(this.value)">
                     <span class="value" id="sensitivity-val">5</span>
                 </div>
+                <div class="slider-hints">
+                    <span>Thick pages / slow turns</span>
+                    <span>Thin pages / quick turns</span>
+                </div>
                 <div class="setting-row">
                     <label>Capture Delay</label>
                     <input type="range" id="stability-delay" min="0.3" max="3" step="0.1" value="1.0" onchange="updateDelay(this.value)">
                     <span class="value" id="stability-delay-val">1.0s</span>
+                </div>
+                <div class="slider-hints">
+                    <span>Snap faster</span>
+                    <span>More settling time</span>
                 </div>
                 <div class="setting-row">
                     <label>Camera</label>
@@ -3309,8 +3484,15 @@ def status():
         motion_threshold = page_snap.config.motion_threshold
         stability_threshold = page_snap.config.stability_threshold
 
-    if ocr_status.get('output') and ocr_status.get('session') and os.path.exists(ocr_status['output']):
-        ocr_status['output_url'] = url_for('session_ocr', session_name=ocr_status['session'])
+    output = ocr_status.get('output')
+    session = ocr_status.get('session')
+    if output and session:
+        if isinstance(output, list):
+            # Multi-model: use first output for primary URL
+            if output and os.path.exists(output[0]):
+                ocr_status['output_url'] = url_for('session_ocr', session_name=session)
+        elif os.path.exists(output):
+            ocr_status['output_url'] = url_for('session_ocr', session_name=session)
 
     return jsonify({
         'capture_count': capture_count,
@@ -3347,8 +3529,9 @@ def run_ocr():
     data = request.json or {}
     session_name = data.get('session') or page_snap.session_name
     models = data.get('models')  # list of model names, or None for default
+    preferences = data.get('preferences')  # OCR preferences (page numbers, etc.)
 
-    started, error = page_snap.trigger_ocr(session_name, models=models)
+    started, error = page_snap.trigger_ocr(session_name, models=models, preferences=preferences)
     if error:
         code = 404 if "Session not found" in error else 409 if "already running" in error else 400
         return jsonify({'error': error}), code
@@ -3361,6 +3544,13 @@ def session_ocr(session_name):
     """Serve the OCR markdown for a session."""
     session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
     md_path = os.path.join(session_path, f"{session_name}_ocr.md")
+
+    if not os.path.exists(md_path):
+        # Try any _ocr file (multi-model outputs)
+        for f in sorted(os.listdir(session_path)):
+            if f.endswith('.md') and '_ocr' in f:
+                md_path = os.path.join(session_path, f)
+                break
 
     if not os.path.exists(md_path):
         return jsonify({'error': 'OCR output not found'}), 404
@@ -3544,6 +3734,67 @@ def api_download_job(job_id):
         as_attachment=True,
         download_name=f"{Path(job['filename']).stem}_ocr.md"
     )
+
+
+@app.route('/export_docx/<session_name>')
+def export_docx(session_name):
+    """Convert OCR markdown to .docx and serve it."""
+    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
+
+    # Find OCR output (try default name first, then model-specific)
+    md_path = os.path.join(session_path, f"{session_name}_ocr.md")
+    if not os.path.exists(md_path):
+        # Try any _ocr_ file
+        for f in os.listdir(session_path):
+            if f.endswith('.md') and '_ocr' in f:
+                md_path = os.path.join(session_path, f)
+                break
+
+    if not os.path.exists(md_path):
+        return jsonify({'error': 'No OCR output found'}), 404
+
+    with open(md_path, 'r') as f:
+        md_content = f.read()
+
+    try:
+        import subprocess
+        docx_path = md_path.replace('.md', '.docx')
+
+        # Use pandoc if available, otherwise basic conversion
+        result = subprocess.run(
+            ['pandoc', '-f', 'markdown', '-t', 'docx', '-o', docx_path, md_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and os.path.exists(docx_path):
+            return send_file(docx_path, as_attachment=True,
+                           download_name=f"{session_name}.docx")
+        else:
+            return jsonify({'error': 'pandoc conversion failed: ' + result.stderr}), 500
+    except FileNotFoundError:
+        return jsonify({'error': 'pandoc not installed. Install with: apt-get install pandoc'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/export_notion', methods=['POST'])
+def export_notion():
+    """Export OCR markdown to Notion (placeholder — needs NOTION_API_KEY)."""
+    data = request.json or {}
+    session_name = data.get('session')
+    if not session_name:
+        return jsonify({'error': 'No session specified'}), 400
+
+    notion_key = os.environ.get('NOTION_API_KEY')
+    if not notion_key:
+        return jsonify({'error': 'NOTION_API_KEY not configured'}), 400
+
+    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
+    md_path = os.path.join(session_path, f"{session_name}_ocr.md")
+    if not os.path.exists(md_path):
+        return jsonify({'error': 'No OCR output found'}), 404
+
+    # Notion export would go here — using the notion_markdown.py or API
+    return jsonify({'error': 'Notion export not yet implemented'}), 501
 
 
 if __name__ == '__main__':
