@@ -1985,7 +1985,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                 (isSecure
                     ? '<p>Your browser does not support camera access.</p>'
                     : '<p>Camera requires <strong>HTTPS</strong> or <strong>localhost</strong>.</p>' +
-                      '<p style="margin-top:8px">You\'re on: <code>' + location.origin + '</code></p>' +
+                      '<p style="margin-top:8px">Currently on: <code>' + location.origin + '</code></p>' +
                       '<p style="margin-top:8px;font-size:13px;color:var(--ink-muted)">Run locally with: <code>python web_app.py</code> then open <code>http://localhost:5001/camera</code></p>') +
                 '</div>';
             return;
