@@ -1566,6 +1566,18 @@ BROWSER_CAMERA_TEMPLATE = '''
             font-size: 14px;
         }
         .photo-upload-label:hover { text-decoration: underline; }
+        .pdf-ready-panel {
+            display: none;
+            padding: 24px;
+            text-align: center;
+            background: var(--cream-warm);
+            border-top: 1px solid var(--border);
+        }
+        .pdf-ready-panel.visible { display: block; }
+        .pdf-ready-icon { font-size: 36px; margin-bottom: 8px; }
+        .pdf-ready-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+        .pdf-ready-meta { color: var(--ink-muted); font-size: 13px; margin-bottom: 16px; }
+        .pdf-ready-actions { display: flex; gap: 10px; justify-content: center; }
         .settings-panel {
             display: none;
             background: var(--cream-warm);
@@ -1826,6 +1838,16 @@ BROWSER_CAMERA_TEMPLATE = '''
                 </div>
             </div>
 
+            <div class="pdf-ready-panel" id="pdf-ready-panel">
+                <div class="pdf-ready-icon">📄</div>
+                <div class="pdf-ready-title" id="pdf-ready-title">PDF Compiled</div>
+                <div class="pdf-ready-meta" id="pdf-ready-meta">Ready to download or run OCR</div>
+                <div class="pdf-ready-actions">
+                    <a class="results-btn primary" id="pdf-download-link" href="#" download>Download PDF</a>
+                    <button class="results-btn" onclick="scanMore()">New Scan</button>
+                </div>
+            </div>
+
             <div class="settings-panel" id="settings-panel">
                 <h3>Settings</h3>
                 <div class="setting-row">
@@ -1918,6 +1940,7 @@ BROWSER_CAMERA_TEMPLATE = '''
     let appState = 'idle';
     let captureCount = 0;
     let ocrOutputUrl = null;
+    let pdfPageCount = 0;
     let cameraStream = null;
     let detecting = false;
     let animFrameId = null;
@@ -2219,16 +2242,14 @@ BROWSER_CAMERA_TEMPLATE = '''
             }
         }
 
-        statusText.textContent = captureCount + ' pages captured';
-        statusText.className = 'status-text scanning';
-        // Enable the main button so they can process
-        document.getElementById('main-button').disabled = false;
-        document.getElementById('main-button').textContent = 'Process OCR';
-        document.getElementById('main-button').className = 'main-button btn-stop';
-        appState = 'scanning';
+        statusText.textContent = captureCount + ' pages captured — compiling PDF...';
+        statusText.className = 'status-text processing';
 
         // Reset file input so same files can be re-selected
         document.getElementById('photo-upload').value = '';
+
+        // Go straight to PDF compilation
+        compilePDF();
     }
 
     // ===== App State Machine =====
@@ -2236,8 +2257,14 @@ BROWSER_CAMERA_TEMPLATE = '''
         switch (appState) {
             case 'idle': startScanning(); break;
             case 'scanning': stopAndProcess(); break;
+            case 'pdf_ready': startOCR(); break;
             case 'done': scanMore(); break;
         }
+    }
+
+    function startOCR() {
+        setAppState('processing');
+        runOCR();
     }
 
     function startScanning() {
@@ -2257,11 +2284,37 @@ BROWSER_CAMERA_TEMPLATE = '''
         if (animFrameId) cancelAnimationFrame(animFrameId);
 
         if (captureCount > 0) {
-            setAppState('processing');
-            runOCR();
+            compilePDF();
         } else {
             setAppState('idle');
         }
+    }
+
+    function compilePDF() {
+        const sessionName = document.getElementById('session-name').textContent;
+        setAppState('compiling');
+
+        fetch('/export_pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: sessionName })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('status-text').textContent = 'PDF Error: ' + data.error;
+                document.getElementById('status-text').className = 'status-text error';
+                setAppState('idle');
+            } else {
+                pdfPageCount = data.page_count;
+                setAppState('pdf_ready');
+            }
+        })
+        .catch(() => {
+            document.getElementById('status-text').textContent = 'PDF compilation failed';
+            document.getElementById('status-text').className = 'status-text error';
+            setAppState('idle');
+        });
     }
 
     function getSelectedModels() {
@@ -2394,6 +2447,10 @@ BROWSER_CAMERA_TEMPLATE = '''
         resultsPanel.classList.remove('visible');
         btn.disabled = false;
 
+        // Hide pdf-ready panel by default
+        const pdfPanel = document.getElementById('pdf-ready-panel');
+        if (pdfPanel) pdfPanel.classList.remove('visible');
+
         switch (state) {
             case 'idle':
                 btn.className = 'main-button btn-start';
@@ -2403,16 +2460,36 @@ BROWSER_CAMERA_TEMPLATE = '''
                 break;
             case 'scanning':
                 btn.className = 'main-button btn-stop';
-                btn.textContent = 'Stop & Process';
+                btn.textContent = 'Stop & Compile PDF';
                 statusText.textContent = 'Scanning...';
                 statusText.className = 'status-text scanning';
                 break;
+            case 'compiling':
+                btn.className = 'main-button btn-processing';
+                btn.textContent = 'Compiling PDF...';
+                btn.disabled = true;
+                statusText.textContent = 'Building PDF from ' + captureCount + ' pages...';
+                statusText.className = 'status-text processing';
+                break;
+            case 'pdf_ready': {
+                btn.className = 'main-button btn-start';
+                btn.textContent = 'Run OCR';
+                statusText.textContent = 'PDF ready — ' + pdfPageCount + ' pages';
+                statusText.className = 'status-text scanning';
+                pdfPanel.classList.add('visible');
+                const sessionName = document.getElementById('session-name').textContent;
+                document.getElementById('pdf-download-link').href = '/download_pdf/' + sessionName;
+                document.getElementById('pdf-ready-meta').textContent =
+                    pdfPageCount + ' pages — download or run OCR';
+                break;
+            }
             case 'processing':
                 btn.className = 'main-button btn-processing';
                 btn.textContent = 'Processing OCR...';
                 btn.disabled = true;
                 statusText.textContent = 'Running OCR...';
                 statusText.className = 'status-text processing';
+                pdfPanel.classList.remove('visible');
                 break;
             case 'done':
                 controlsArea.style.display = 'none';
