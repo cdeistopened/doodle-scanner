@@ -2382,20 +2382,13 @@ BROWSER_CAMERA_TEMPLATE = '''
     }
 
     function renderMarkdown(md) {
-        // Lightweight markdown to HTML (covers the essentials)
-        let html = md
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-            .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-            .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/^\&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
-            .replace(/^---$/gm, '<hr>')
-            .replace(/\[\^(\d+)\]/g, '<sup>[$1]</sup>')
-            .replace(/\n\n/g, '</p><p>')
-            .replace(new RegExp('\\x3c!-- page (\\d+) --\\x3e', 'g'), '<span style="color:var(--ink-muted);font-size:11px;float:right">[p.$1]</span>');
-        return '<p>' + html + '</p>';
+        // Plain text preview — regex-in-template is a footgun
+        var el = document.createElement('pre');
+        el.style.cssText = 'white-space:pre-wrap;font-size:13px;line-height:1.6;font-family:Georgia,serif;margin:0;padding:16px';
+        el.textContent = md;
+        var wrapper = document.createElement('div');
+        wrapper.appendChild(el);
+        return wrapper.innerHTML;
     }
 
     function setPreviewMode(mode, btn) {
