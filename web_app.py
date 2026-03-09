@@ -141,14 +141,25 @@ class PageSnapApp:
         os.makedirs(self.output_dir, exist_ok=True)
 
     def save_capture_from_bytes(self, image_bytes: bytes) -> str:
-        """Save a capture from browser-submitted image bytes."""
+        """Save a capture from browser-submitted image bytes.
+
+        Downsamples to MAX_IMAGE_DIMENSION on the long edge to keep
+        file sizes reasonable while preserving text sharpness for OCR.
+        """
+        from ocr_gemini import downsample_image
+
+        downsampled = downsample_image(image_bytes)
+
         self.capture_count += 1
         filename = f"{self.session_name}_{self.capture_count:04d}.jpg"
         filepath = os.path.join(self.output_dir, filename)
         with open(filepath, 'wb') as f:
-            f.write(image_bytes)
+            f.write(downsampled)
         self.last_capture_time = time.time()
-        print(f"Captured (browser): {filename}")
+
+        original_kb = len(image_bytes) / 1024
+        saved_kb = len(downsampled) / 1024
+        print(f"Captured (browser): {filename} ({original_kb:.0f}KB -> {saved_kb:.0f}KB)")
         return filename
 
     def _initial_ocr_status(self):
@@ -257,13 +268,23 @@ class PageSnapApp:
         )
     
     def save_capture(self, frame: np.ndarray):
+        """Save a captured OpenCV frame, downsampled for OCR."""
+        from ocr_gemini import MAX_IMAGE_DIMENSION
+        h, w = frame.shape[:2]
+        long_edge = max(w, h)
+        if long_edge > MAX_IMAGE_DIMENSION:
+            scale = MAX_IMAGE_DIMENSION / long_edge
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
         self.capture_count += 1
         filename = f"{self.session_name}_{self.capture_count:04d}.jpg"
         filepath = os.path.join(self.output_dir, filename)
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality]
         cv2.imwrite(filepath, frame, encode_params)
         self.last_capture_time = time.time()
-        print(f"Captured: {filename}")
+        print(f"Captured: {filename} ({frame.shape[1]}x{frame.shape[0]})")
     
     def generate_frames(self):
         self.start_camera()
@@ -1457,6 +1478,58 @@ BROWSER_CAMERA_TEMPLATE = '''
             pointer-events: none;
             z-index: 1000;
         }
+        .bounding-box-overlay {
+            position: absolute;
+            border: 2px dashed rgba(79, 70, 229, 0.7);
+            background: transparent;
+            pointer-events: none;
+            z-index: 5;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+        }
+        .bounding-box-label {
+            position: absolute;
+            top: -22px;
+            left: 0;
+            font-size: 11px;
+            color: rgba(79, 70, 229, 0.9);
+            background: rgba(255,255,255,0.85);
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-weight: 500;
+        }
+        .preset-buttons {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+        .preset-btn {
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            background: var(--surface);
+            transition: all 0.1s;
+        }
+        .preset-btn:hover { border-color: var(--accent); }
+        .preset-btn.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+        .image-size-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 11px;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 8px;
+            border-radius: 3px;
+            z-index: 6;
+            font-family: monospace;
+        }
         .camera-error {
             padding: 40px 20px;
             text-align: center;
@@ -1494,10 +1567,15 @@ BROWSER_CAMERA_TEMPLATE = '''
         <p class="subtitle">Position camera over your book and flip pages</p>
 
         <div class="scanner-frame">
-            <div class="camera-area" id="camera-area">
+            <div class="camera-area" id="camera-area" style="position:relative">
                 <video id="camera-video" autoplay playsinline muted></video>
                 <canvas id="detect-canvas" style="display:none"></canvas>
                 <canvas id="capture-canvas" style="display:none"></canvas>
+
+                <div class="bounding-box-overlay" id="bounding-box" style="display:none">
+                    <span class="bounding-box-label" id="bounding-box-label"></span>
+                </div>
+                <div class="image-size-badge" id="image-size-badge" style="display:none"></div>
 
                 <button class="manual-capture-btn hidden" id="manual-capture-btn"
                         onclick="manualCapture()" title="Manual capture"></button>
@@ -1535,6 +1613,16 @@ BROWSER_CAMERA_TEMPLATE = '''
                     <input type="range" id="stability-delay" min="0.3" max="3" step="0.1" value="1.0"
                            oninput="updateDelay(this.value)">
                     <span class="value" id="stability-delay-val">1.0s</span>
+                </div>
+                <div class="setting-row" style="flex-direction:column; align-items:flex-start">
+                    <label style="width:auto; margin-bottom:6px">Book Size Guide</label>
+                    <div class="preset-buttons">
+                        <button class="preset-btn active" onclick="setBookPreset('none')">None</button>
+                        <button class="preset-btn" onclick="setBookPreset('paperback')">Paperback</button>
+                        <button class="preset-btn" onclick="setBookPreset('trade')">Trade</button>
+                        <button class="preset-btn" onclick="setBookPreset('letter')">Letter</button>
+                        <button class="preset-btn" onclick="setBookPreset('square')">Square</button>
+                    </div>
                 </div>
             </div>
 
@@ -1604,6 +1692,10 @@ BROWSER_CAMERA_TEMPLATE = '''
                 // Detection canvas is scaled down
                 detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
                 detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
+                // Show camera resolution badge
+                showImageSize();
+                // Position bounding box if a preset is active
+                updateBoundingBox();
             });
 
             document.getElementById('status-text').textContent = 'Ready to scan';
@@ -1714,8 +1806,46 @@ BROWSER_CAMERA_TEMPLATE = '''
 
     // ===== Capture =====
     function captureFrame() {
-        // Draw full-res frame to capture canvas
-        captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+        const preset = BOOK_PRESETS[activePreset];
+
+        if (preset && preset.ratio) {
+            // Crop to bounding box region
+            const area = document.getElementById('camera-area');
+            const areaW = area.offsetWidth;
+            const areaH = area.offsetHeight;
+            const scaleX = video.videoWidth / areaW;
+            const scaleY = video.videoHeight / areaH;
+
+            // Recalculate box in video-pixel coordinates
+            const padding = 0.08;
+            const availW = areaW * (1 - 2 * padding);
+            const availH = areaH * (1 - 2 * padding);
+            let boxW, boxH;
+            if (availW / availH > preset.ratio) {
+                boxH = availH; boxW = boxH * preset.ratio;
+            } else {
+                boxW = availW; boxH = boxW / preset.ratio;
+            }
+            const boxLeft = (areaW - boxW) / 2;
+            const boxTop = (areaH - boxH) / 2;
+
+            // Source rect in video pixels
+            const sx = boxLeft * scaleX;
+            const sy = boxTop * scaleY;
+            const sw = boxW * scaleX;
+            const sh = boxH * scaleY;
+
+            // Size capture canvas to cropped region
+            captureCanvas.width = Math.round(sw);
+            captureCanvas.height = Math.round(sh);
+            captureCtx.drawImage(video, sx, sy, sw, sh, 0, 0, captureCanvas.width, captureCanvas.height);
+        } else {
+            // No bounding box — capture full frame
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+        }
+
         const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.90);
 
         // Flash effect
@@ -1880,6 +2010,84 @@ BROWSER_CAMERA_TEMPLATE = '''
     function updateDelay(value) {
         document.getElementById('stability-delay-val').textContent = value + 's';
         config.stabilityDelay = parseFloat(value);
+    }
+
+    // ===== Book Size Bounding Box =====
+    // Aspect ratios (width:height) for common book formats
+    const BOOK_PRESETS = {
+        none:      { ratio: null, label: '' },
+        paperback: { ratio: 6 / 9, label: 'Paperback 6\u00d79' },
+        trade:     { ratio: 5.5 / 8.5, label: 'Trade 5.5\u00d78.5' },
+        letter:    { ratio: 8.5 / 11, label: 'Letter 8.5\u00d711' },
+        square:    { ratio: 1, label: 'Square' },
+    };
+    let activePreset = 'none';
+
+    function setBookPreset(name) {
+        activePreset = name;
+        // Update button states
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.textContent.toLowerCase() === name ||
+                (name === 'none' && btn.textContent === 'None'));
+        });
+        updateBoundingBox();
+    }
+
+    function updateBoundingBox() {
+        const box = document.getElementById('bounding-box');
+        const label = document.getElementById('bounding-box-label');
+        const preset = BOOK_PRESETS[activePreset];
+
+        if (!preset || !preset.ratio) {
+            box.style.display = 'none';
+            return;
+        }
+
+        const video = document.getElementById('camera-video');
+        const area = document.getElementById('camera-area');
+        const areaW = area.offsetWidth;
+        const areaH = area.offsetHeight;
+
+        if (areaW === 0 || areaH === 0) return;
+
+        // Fit the book ratio inside the camera view with 8% padding
+        const padding = 0.08;
+        const availW = areaW * (1 - 2 * padding);
+        const availH = areaH * (1 - 2 * padding);
+
+        let boxW, boxH;
+        if (availW / availH > preset.ratio) {
+            // Height-constrained
+            boxH = availH;
+            boxW = boxH * preset.ratio;
+        } else {
+            // Width-constrained
+            boxW = availW;
+            boxH = boxW / preset.ratio;
+        }
+
+        const left = (areaW - boxW) / 2;
+        const top = (areaH - boxH) / 2;
+
+        box.style.display = 'block';
+        box.style.left = left + 'px';
+        box.style.top = top + 'px';
+        box.style.width = boxW + 'px';
+        box.style.height = boxH + 'px';
+        label.textContent = preset.label;
+    }
+
+    // Update bounding box on resize
+    window.addEventListener('resize', updateBoundingBox);
+
+    // ===== Image Size Badge =====
+    function showImageSize() {
+        const video = document.getElementById('camera-video');
+        const badge = document.getElementById('image-size-badge');
+        if (video.videoWidth && video.videoHeight) {
+            badge.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
+            badge.style.display = 'block';
+        }
     }
 
     // ===== OCR Status Polling =====

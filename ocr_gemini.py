@@ -1,78 +1,93 @@
 #!/usr/bin/env python3
 """
-OCR using Gemini 3 Flash Preview for PageSnap sessions.
-Processes all images in a session and concatenates OCR results.
+OCR for PageSnap sessions — combines captured images into a single PDF,
+then runs the chunked pdf_pipeline for continuous, cross-page processing.
+
+Replaces the old one-image-at-a-time approach with pdf-vision-style
+chunked OCR: preflight analysis, good prompts, boundary smoothing,
+retry logic.
 """
 
 import os
 import sys
-import base64
 import glob
-import argparse
+import io
 from pathlib import Path
 
 try:
-    from google import genai
+    from PIL import Image
 except ImportError:
-    print("Please install google-genai: pip install google-genai")
+    print("Please install Pillow: pip install Pillow")
+    sys.exit(1)
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    print("Please install pymupdf: pip install pymupdf")
     sys.exit(1)
 
 
-def load_env():
-    """Load environment variables from .env file.
+# Max dimension for captured images (long edge in pixels).
+# 1500px preserves text sharpness while cutting file size ~5x vs 4K iPhone.
+MAX_IMAGE_DIMENSION = 1500
+JPEG_QUALITY = 85
 
-    Note: This OVERRIDES existing environment variables to ensure
-    project-specific keys are used (not stale shell env vars).
+
+def downsample_image(image_bytes: bytes) -> bytes:
+    """Downsample an image so its long edge <= MAX_IMAGE_DIMENSION.
+
+    Returns JPEG bytes. Skips resize if already small enough.
     """
-    env_paths = [
-        Path(__file__).parent / ".env",
-        Path(__file__).parent.parent / ".env",  # Parent doodle-reader folder
-        Path.cwd() / ".env",
-    ]
-    for env_path in env_paths:
-        # Resolve symlinks
-        if env_path.is_symlink():
-            env_path = env_path.resolve()
-        if env_path.exists():
-            print(f"Loading env from: {env_path}")
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, value = line.split("=", 1)
-                        # Override existing env vars with project .env
-                        os.environ[key.strip()] = value.strip()
-            break
+    img = Image.open(io.BytesIO(image_bytes))
+    w, h = img.size
+    long_edge = max(w, h)
+
+    if long_edge > MAX_IMAGE_DIMENSION:
+        scale = MAX_IMAGE_DIMENSION / long_edge
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # Ensure RGB (no alpha channel for JPEG)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=JPEG_QUALITY)
+    return buf.getvalue()
 
 
-def encode_image(image_path: str) -> bytes:
-    """Read image as bytes."""
-    with open(image_path, "rb") as f:
-        return f.read()
+def images_to_pdf(image_paths: list, output_pdf_path: str) -> str:
+    """Combine a list of JPEG images into a single PDF.
 
+    Downsamples each image before embedding. Returns the PDF path.
+    """
+    doc = fitz.open()
 
-def ocr_image(client, image_path: str) -> str:
-    """OCR a single image using Gemini 3 Flash Preview."""
-    image_data = encode_image(image_path)
+    for img_path in image_paths:
+        with open(img_path, 'rb') as f:
+            raw_bytes = f.read()
 
-    prompt = """Extract all text from this scanned book page.
-Output the text exactly as it appears, preserving:
-- Paragraph breaks
-- Headers and subheaders
-- Any formatting like italics or bold (use markdown)
-- Footnotes (place at bottom of page text)
+        # Downsample
+        jpg_bytes = downsample_image(raw_bytes)
 
-Do not add any commentary or explanations. Just output the text."""
+        # Get dimensions
+        img = Image.open(io.BytesIO(jpg_bytes))
+        w, h = img.size
 
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=[
-            genai.types.Part.from_bytes(data=image_data, mime_type="image/jpeg"),
-            prompt
-        ]
-    )
+        # Create page sized to image (in points: 1 point = 1/72 inch)
+        # Use 150 DPI as reference so pages aren't tiny
+        page_w = w * 72.0 / 150.0
+        page_h = h * 72.0 / 150.0
+        page = doc.new_page(width=page_w, height=page_h)
 
-    return response.text
+        # Insert image
+        rect = fitz.Rect(0, 0, page_w, page_h)
+        page.insert_image(rect, stream=jpg_bytes)
+
+    doc.save(output_pdf_path)
+    doc.close()
+    return output_pdf_path
 
 
 def _handle_error(message: str, exit_on_error: bool):
@@ -83,16 +98,14 @@ def _handle_error(message: str, exit_on_error: bool):
     raise RuntimeError(message)
 
 
-def process_session(session_path: str, output_path: str = None, progress_callback=None, exit_on_error: bool = True) -> str:
-    """Process all images in a session directory."""
-    load_env()
+def process_session(session_path: str, output_path: str = None,
+                    progress_callback=None, exit_on_error: bool = True) -> str:
+    """Process all images in a session directory.
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        _handle_error("GEMINI_API_KEY environment variable not set", exit_on_error)
-
-    client = genai.Client(api_key=api_key)
-
+    1. Combines JPEGs into a single PDF (with downsampling)
+    2. Runs pdf_pipeline's chunked OCR with analysis, good prompts,
+       retry logic, and boundary smoothing
+    """
     session_dir = Path(session_path)
     if not session_dir.exists():
         _handle_error(f"Session directory not found: {session_path}", exit_on_error)
@@ -101,42 +114,58 @@ def process_session(session_path: str, output_path: str = None, progress_callbac
     if not images:
         _handle_error(f"No JPG images found in {session_path}", exit_on_error)
 
-    print(f"Found {len(images)} images in session")
-
     total_pages = len(images)
+    print(f"Found {total_pages} images in session")
+
+    # Step 1: Combine images into PDF
     if progress_callback:
-        progress_callback(0, total_pages, None)
+        progress_callback(0, total_pages, "combine")
+    print(f"  Combining {total_pages} images into PDF (downsampling to {MAX_IMAGE_DIMENSION}px)...")
 
-    all_text = []
-    for i, img_path in enumerate(images, 1):
-        print(f"Processing {i}/{len(images)}: {Path(img_path).name}...")
-        try:
-            text = ocr_image(client, img_path)
-            all_text.append(f"<!-- Page {i} -->\n\n{text}")
-        except Exception as e:
-            print(f"  Error: {e}")
-            all_text.append(f"<!-- Page {i} - OCR FAILED: {e} -->")
-        if progress_callback:
-            progress_callback(i, total_pages, Path(img_path).name)
+    pdf_path = str(session_dir / f"{session_dir.name}.pdf")
+    images_to_pdf(images, pdf_path)
 
-    combined = "\n\n---\n\n".join(all_text)
+    pdf_size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+    print(f"  PDF created: {pdf_size_mb:.1f} MB")
+
+    # Step 2: Run chunked pipeline
+    from pdf_pipeline import process_pdf
 
     if output_path is None:
-        output_path = session_dir / f"{session_dir.name}_ocr.md"
+        output_path = str(session_dir / f"{session_dir.name}_ocr.md")
 
-    with open(output_path, "w") as f:
-        f.write(combined)
+    def pipeline_progress(completed, total, description):
+        """Map pdf_pipeline progress to our callback format."""
+        if progress_callback:
+            progress_callback(completed, total, description)
 
-    print(f"\nOCR complete! Output saved to: {output_path}")
-    if progress_callback:
-        progress_callback(total_pages, total_pages, None)
-    return str(output_path)
+    try:
+        result = process_pdf(
+            pdf_path,
+            output_path=output_path,
+            progress_callback=pipeline_progress,
+        )
+        print(f"\nOCR complete! {result.get('total_chars', 0):,} chars")
+        print(f"Output saved to: {output_path}")
+
+        if progress_callback:
+            progress_callback(total_pages, total_pages, None)
+
+        return str(output_path)
+
+    except Exception as e:
+        _handle_error(f"Pipeline failed: {e}", exit_on_error)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OCR PageSnap sessions using Gemini 2.0 Flash")
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="OCR PageSnap sessions — combines images into PDF, "
+                    "then runs chunked Gemini OCR pipeline"
+    )
     parser.add_argument("session", help="Path to session directory containing JPG images")
-    parser.add_argument("-o", "--output", help="Output markdown file path (default: <session>_ocr.md)")
+    parser.add_argument("-o", "--output", help="Output markdown file path")
 
     args = parser.parse_args()
     process_session(args.session, args.output)
