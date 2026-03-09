@@ -1079,6 +1079,44 @@ UPLOAD_PAGE = '''
             padding: 32px;
             color: var(--ink-muted);
         }
+        /* Whimsical thinking animation */
+        @keyframes shimmer {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        .thinking-dots {
+            display: inline-flex;
+            gap: 3px;
+            margin-left: 6px;
+        }
+        .thinking-dots span {
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: shimmer 1.4s ease-in-out infinite;
+        }
+        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+        .thinking-status {
+            font-size: 12px;
+            color: var(--accent);
+            font-style: italic;
+            margin-top: 6px;
+        }
+        .cost-estimate-live {
+            font-size: 12px;
+            color: var(--ink-muted);
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: var(--cream-warm);
+            border-radius: 6px;
+        }
+        .cost-estimate-live .cost-value {
+            font-weight: 600;
+            color: var(--ink-soft);
+        }
     </style>
 </head>
 <body>
@@ -1148,21 +1186,24 @@ UPLOAD_PAGE = '''
                     <h3 style="font-size: 14px; font-weight: 600; margin: 0 0 12px; color: var(--ink-soft);">OCR Model</h3>
                     <div style="display:flex; flex-direction:column; gap:6px; font-size:13px">
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-3-flash-preview" checked>
-                            <span>Gemini 3 Flash Preview <span style="color:var(--ink-muted)">(default, best accuracy)</span></span>
+                            <input type="radio" name="ocr-model" value="gemini-3-flash-preview" checked onchange="updateCostEstimate()">
+                            <span>Gemini 3 Flash <span style="color:var(--ink-muted)">— best accuracy, $0.50/M input</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-2.0-flash">
-                            <span>Gemini 2.0 Flash <span style="color:var(--ink-muted)">(faster, good quality)</span></span>
+                            <input type="radio" name="ocr-model" value="gemini-2.0-flash" onchange="updateCostEstimate()">
+                            <span>Gemini 2.0 Flash <span style="color:var(--ink-muted)">— budget pick, $0.10/M input (5x cheaper)</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-2.5-flash-lite">
-                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">(fastest, cheapest)</span></span>
+                            <input type="radio" name="ocr-model" value="gemini-2.5-flash-lite" onchange="updateCostEstimate()">
+                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">— balanced, $0.30/M input</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-2.5-pro">
-                            <span>Gemini 2.5 Pro <span style="color:var(--ink-muted)">(slowest, highest quality)</span></span>
+                            <input type="radio" name="ocr-model" value="gemini-3.1-pro-preview" onchange="updateCostEstimate()">
+                            <span>Gemini 3.1 Pro <span style="color:var(--ink-muted)">— highest quality, $2.50/M input (5x more)</span></span>
                         </label>
+                    </div>
+                    <div class="cost-estimate-live" id="model-cost-estimate" style="display:none">
+                        Estimated cost with this model: <span class="cost-value" id="model-cost-value">—</span>
                     </div>
                 </div>
             </div>
@@ -1202,7 +1243,7 @@ UPLOAD_PAGE = '''
             }
 
             uploadZone.classList.add('uploading');
-            uploadZone.querySelector('.upload-text').textContent = 'Uploading...';
+            uploadZone.querySelector('.upload-text').innerHTML = 'Uploading<span class="thinking-dots"><span></span><span></span><span></span></span>';
 
             const formData = new FormData();
             formData.append('file', file);
@@ -1262,8 +1303,32 @@ UPLOAD_PAGE = '''
                         }
 
                         let progress = '';
-                        if (job.status === 'processing' && job.current_chunk) {
-                            progress = `<div class="job-progress">${job.progress}% - ${job.current_chunk}</div>`;
+                        if (job.status === 'analyzing') {
+                            const verbs = [
+                                'Squinting at your pages',
+                                'Counting footnotes',
+                                'Deciphering margins',
+                                'Inspecting the typography',
+                                'Admiring the layout',
+                                'Checking for secret messages',
+                                'Reading between the lines',
+                                'Consulting the font spirits',
+                            ];
+                            const verb = verbs[Math.floor(Date.now() / 3000) % verbs.length];
+                            progress = `<div class="thinking-status">${verb}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
+                        } else if (job.status === 'processing' && job.current_chunk) {
+                            const pct = job.progress || 0;
+                            const bar = '█'.repeat(Math.floor(pct / 5)) + '░'.repeat(20 - Math.floor(pct / 5));
+                            progress = `<div class="job-progress">${bar} ${pct}%<br><span style="color:var(--accent);font-style:italic">${job.current_chunk}</span></div>`;
+                        } else if (job.status === 'processing') {
+                            const verbs2 = [
+                                'Warming up the vision engines',
+                                'Teaching Gemini to read',
+                                'Converting pixels to prose',
+                                'Extracting the good stuff',
+                            ];
+                            const verb2 = verbs2[Math.floor(Date.now() / 3000) % verbs2.length];
+                            progress = `<div class="thinking-status">${verb2}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
                         } else if (job.status === 'complete' && job.chunks_failed > 0) {
                             progress = `<div class="job-progress" style="color: var(--warning);">⚠ ${job.chunks_failed}/${job.chunks_total} chunks failed</div>`;
                         } else if (job.status === 'error' && job.error) {
@@ -1397,12 +1462,46 @@ UPLOAD_PAGE = '''
                 footerDetail.textContent = '(none detected)';
             }
 
+            // Store base cost for model-based recalculation
+            baseCostUsd = a.estimated_cost_usd || 0;
+
+            // Reset model selection to default and update cost
+            const defaultModel = document.querySelector('input[name="ocr-model"][value="gemini-3-flash-preview"]');
+            if (defaultModel) defaultModel.checked = true;
+            updateCostEstimate();
+
             document.getElementById('analysis-modal').classList.add('active');
         }
 
         function closeModal() {
             document.getElementById('analysis-modal').classList.remove('active');
             pendingJobId = null;
+        }
+
+        // Model cost multipliers relative to gemini-3-flash-preview (1.0x)
+        const MODEL_COST_MULTIPLIERS = {
+            'gemini-2.0-flash': 0.2,
+            'gemini-2.5-flash-lite': 0.6,
+            'gemini-3-flash-preview': 1.0,
+            'gemini-3.1-pro-preview': 5.0,
+        };
+        let baseCostUsd = 0;
+
+        function updateCostEstimate() {
+            const selectedModel = document.querySelector('input[name="ocr-model"]:checked');
+            if (!selectedModel || !baseCostUsd) return;
+            const multiplier = MODEL_COST_MULTIPLIERS[selectedModel.value] || 1.0;
+            const adjusted = baseCostUsd * multiplier;
+            const el = document.getElementById('model-cost-estimate');
+            const val = document.getElementById('model-cost-value');
+            el.style.display = 'block';
+            val.textContent = '$' + adjusted.toFixed(3);
+
+            // Also update the cost in the modal
+            const costAmount = document.querySelector('.cost-amount');
+            if (costAmount) {
+                costAmount.textContent = '$' + adjusted.toFixed(3);
+            }
         }
 
         function confirmProcessing() {
@@ -1932,11 +2031,11 @@ BROWSER_CAMERA_TEMPLATE = '''
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
                             <input type="checkbox" class="model-checkbox" value="gemini-2.5-flash-lite">
-                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">(fastest, cheapest)</span></span>
+                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">(balanced, lighter)</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="checkbox" class="model-checkbox" value="gemini-2.5-pro">
-                            <span>Gemini 2.5 Pro <span style="color:var(--ink-muted)">(slowest, highest quality)</span></span>
+                            <input type="checkbox" class="model-checkbox" value="gemini-3.1-pro-preview">
+                            <span>Gemini 3.1 Pro <span style="color:var(--ink-muted)">(highest quality, 5x cost)</span></span>
                         </label>
                     </div>
                 </div>
