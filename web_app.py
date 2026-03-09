@@ -2444,6 +2444,12 @@ BROWSER_CAMERA_TEMPLATE = '''
                             'OCR Error: ' + (data.ocr.error || 'Unknown');
                         document.getElementById('status-text').className = 'status-text error';
                         setAppState('idle');
+                    } else if (data.ocr.state === 'idle') {
+                        // Server restarted mid-job — reset gracefully
+                        document.getElementById('status-text').textContent =
+                            'Server restarted. Please re-run OCR.';
+                        document.getElementById('status-text').className = 'status-text error';
+                        setAppState('idle');
                     }
                 }
             });
