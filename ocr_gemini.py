@@ -103,7 +103,8 @@ def _handle_error(message: str, exit_on_error: bool):
 
 
 def process_session(session_path: str, output_path: str = None,
-                    progress_callback=None, exit_on_error: bool = True) -> str:
+                    progress_callback=None, exit_on_error: bool = True,
+                    model: str = None) -> str:
     """Process all images in a session directory.
 
     1. Combines JPEGs into a single PDF (with downsampling)
@@ -148,6 +149,7 @@ def process_session(session_path: str, output_path: str = None,
             pdf_path,
             output_path=output_path,
             progress_callback=pipeline_progress,
+            model=model,
         )
         print(f"\nOCR complete! {result.get('total_chars', 0):,} chars")
         print(f"Output saved to: {output_path}")

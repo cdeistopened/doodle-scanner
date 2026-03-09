@@ -292,11 +292,12 @@ def clean_output(text: str) -> str:
     return cleaned
 
 
-def _call_gemini_with_timeout(pdf_bytes: bytes, prompt: str, api_key: str, timeout: int) -> str:
+def _call_gemini_with_timeout(pdf_bytes: bytes, prompt: str, api_key: str, timeout: int, model: str = None) -> str:
     """Call Gemini API with native HTTP timeout.
 
     Args:
         timeout: Timeout in seconds (converted to milliseconds for HttpOptions)
+        model: Gemini model ID to use (defaults to GEMINI_MODEL)
     """
     from google import genai
 
@@ -306,7 +307,7 @@ def _call_gemini_with_timeout(pdf_bytes: bytes, prompt: str, api_key: str, timeo
     client = genai.Client(api_key=api_key, http_options=http_options)
 
     response = client.models.generate_content(
-        model=GEMINI_MODEL,
+        model=model or GEMINI_MODEL,
         contents=[
             genai.types.Part.from_bytes(
                 data=pdf_bytes,
@@ -343,6 +344,7 @@ def ocr_pdf_chunk(
     chunk_info: str = "",
     max_retries: int = MAX_RETRIES,
     timeout: int = API_TIMEOUT_SECONDS,
+    model: str = None,
 ) -> str:
     """Send PDF bytes to Gemini for OCR processing with retry and timeout."""
 
@@ -357,7 +359,7 @@ def ocr_pdf_chunk(
                 print(f"    [Retry {attempt + 1}/{max_retries} after {backoff}s backoff]")
                 time.sleep(backoff)
 
-            result = _call_gemini_with_timeout(pdf_bytes, full_prompt, api_key, timeout)
+            result = _call_gemini_with_timeout(pdf_bytes, full_prompt, api_key, timeout, model=model)
             return clean_output(result)
 
         except Exception as e:
@@ -636,6 +638,7 @@ def process_pdf(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     preferences: Dict[str, Any] = None,
     analysis: Dict[str, Any] = None,
+    model: str = None,
 ) -> Dict[str, Any]:
     """
     Process a PDF with intelligent chunking.
@@ -711,7 +714,7 @@ CONTINUATION CONTEXT:
 
             # OCR the chunk with retry logic
             start_time = time.time()
-            result = ocr_pdf_chunk(api_key, pdf_bytes, prompt, chunk_info)
+            result = ocr_pdf_chunk(api_key, pdf_bytes, prompt, chunk_info, model=model)
             elapsed = time.time() - start_time
 
             # Validate chunk

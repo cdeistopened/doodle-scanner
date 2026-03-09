@@ -177,8 +177,14 @@ class PageSnapApp:
         self.ocr_status = self._initial_ocr_status()
         self.ocr_thread = None
 
-    def _start_ocr_thread(self, session_name: str, session_path: str, images: list):
-        """Start OCR processing in a background thread."""
+    def _start_ocr_thread(self, session_name: str, session_path: str, images: list, models: list = None):
+        """Start OCR processing in a background thread.
+
+        If multiple models are specified, runs OCR once per model with separate output files.
+        """
+        if not models:
+            models = ["gemini-3-flash-preview"]
+
         def progress_callback(completed, total, current_file):
             with self.lock:
                 self.ocr_status.update({
@@ -190,20 +196,47 @@ class PageSnapApp:
         def worker():
             try:
                 from ocr_gemini import process_session
-                output_path = process_session(
-                    session_path,
-                    progress_callback=progress_callback,
-                    exit_on_error=False
-                )
+                outputs = []
+
+                for idx, model in enumerate(models):
+                    model_label = model.replace("/", "-")
+                    if len(models) > 1:
+                        # Distinct output file per model
+                        output_path = os.path.join(session_path, f"{session_name}_ocr_{model_label}.md")
+                        with self.lock:
+                            self.ocr_status['current_page'] = f"Model {idx + 1}/{len(models)}: {model}"
+                    else:
+                        output_path = None  # use default
+
+                    result_path = process_session(
+                        session_path,
+                        output_path=output_path,
+                        progress_callback=progress_callback,
+                        exit_on_error=False,
+                        model=model,
+                    )
+                    outputs.append(result_path)
+
                 with self.lock:
                     self.ocr_status.update({
                         'state': 'complete',
-                        'output': output_path,
+                        'output': outputs[0] if len(outputs) == 1 else outputs,
                         'error': None,
                         'completed': len(images),
                         'total': len(images),
                         'current_page': None
                     })
+                # Save metadata for library
+                _save_session_metadata(session_path, {
+                    'name': session_name,
+                    'type': 'scan',
+                    'pages': len(images),
+                    'status': 'complete',
+                    'has_ocr': True,
+                    'models': models,
+                    'created': session_name,
+                    'completed': datetime.now().isoformat(),
+                })
             except BaseException as e:
                 import traceback
                 error_msg = f"{type(e).__name__}: {e}"
@@ -229,7 +262,7 @@ class PageSnapApp:
         self.ocr_thread = threading.Thread(target=worker, daemon=True)
         self.ocr_thread.start()
 
-    def trigger_ocr(self, session_name: str):
+    def trigger_ocr(self, session_name: str, models: list = None):
         """Validate and start OCR for a session if not already running."""
         session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
         if not os.path.exists(session_path):
@@ -243,7 +276,7 @@ class PageSnapApp:
             if self.ocr_status.get('state') == 'running':
                 return False, "OCR already running"
 
-        self._start_ocr_thread(session_name, session_path, images)
+        self._start_ocr_thread(session_name, session_path, images, models=models)
         return True, None
     
     def start_camera(self):
@@ -545,6 +578,102 @@ pdf_manager = PDFJobManager()
 
 
 # ============================================================================
+# Session Metadata (persistent library)
+# ============================================================================
+
+def _save_session_metadata(session_path: str, meta: dict):
+    """Save metadata JSON alongside a session for the library view."""
+    meta_path = os.path.join(session_path, "metadata.json")
+    try:
+        # Merge with existing metadata if present
+        existing = {}
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                existing = json.load(f)
+        existing.update(meta)
+        with open(meta_path, 'w') as f:
+            json.dump(existing, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Failed to save metadata: {e}")
+
+
+def _get_library_items() -> list:
+    """Get all items for the library — camera sessions + PDF uploads."""
+    items = []
+
+    # Camera sessions (from disk)
+    sessions_dir = os.path.join(os.path.dirname(__file__), "sessions")
+    if os.path.exists(sessions_dir):
+        for name in sorted(os.listdir(sessions_dir), reverse=True):
+            session_path = os.path.join(sessions_dir, name)
+            if not os.path.isdir(session_path):
+                continue
+
+            images = [f for f in os.listdir(session_path) if f.endswith('.jpg')]
+            has_ocr = os.path.exists(os.path.join(session_path, f"{name}_ocr.md"))
+            has_pdf = os.path.exists(os.path.join(session_path, f"{name}.pdf"))
+
+            # Load metadata if it exists
+            meta = {}
+            meta_path = os.path.join(session_path, "metadata.json")
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                except Exception:
+                    pass
+
+            # Get file sizes
+            ocr_size = 0
+            if has_ocr:
+                ocr_path = os.path.join(session_path, f"{name}_ocr.md")
+                ocr_size = os.path.getsize(ocr_path)
+
+            # Parse date from session name (format: YYYYMMDD_HHMMSS)
+            created = meta.get('created', name)
+            try:
+                dt = datetime.strptime(name, "%Y%m%d_%H%M%S")
+                date_display = dt.strftime("%b %d, %Y %I:%M %p")
+            except ValueError:
+                date_display = name
+
+            items.append({
+                'id': name,
+                'title': meta.get('title', name),
+                'type': 'scan',
+                'pages': len(images),
+                'status': 'complete' if has_ocr else ('pending' if images else 'empty'),
+                'date': date_display,
+                'date_sort': name,
+                'has_ocr': has_ocr,
+                'has_pdf': has_pdf,
+                'ocr_size': ocr_size,
+                'ocr_words': meta.get('ocr_words', 0),
+            })
+
+    # PDF upload jobs (from job manager — in-memory, plus any on disk)
+    output_dir = os.path.join(os.path.dirname(__file__), "output")
+    for job in pdf_manager.list_jobs():
+        items.append({
+            'id': job['id'],
+            'title': job.get('filename', job['id']),
+            'type': 'upload',
+            'pages': job.get('page_count', 0),
+            'status': job.get('status', 'unknown'),
+            'date': job.get('created_at', '')[:19].replace('T', ' '),
+            'date_sort': job.get('created_at', ''),
+            'has_ocr': job.get('status') == 'complete',
+            'has_pdf': True,
+            'ocr_size': 0,
+            'ocr_words': 0,
+        })
+
+    # Sort by date descending
+    items.sort(key=lambda x: x['date_sort'], reverse=True)
+    return items
+
+
+# ============================================================================
 # HTML Templates
 # ============================================================================
 
@@ -677,6 +806,12 @@ LANDING_PAGE = '''
                 Point your camera at a book and flip pages. We'll automatically detect page turns and capture each page for OCR processing.
             </div>
             <span class="route-badge">Doodle Scanner</span>
+        </a>
+    </div>
+
+    <div style="margin-top: 32px;">
+        <a href="/library" style="color: var(--accent); font-size: 15px; text-decoration: none; font-weight: 500;">
+            View Library &rarr;
         </a>
     </div>
 
@@ -1628,6 +1763,27 @@ BROWSER_CAMERA_TEMPLATE = '''
                         <button class="preset-btn" onclick="setBookPreset('square')">Square</button>
                     </div>
                 </div>
+                <div class="setting-row" style="flex-direction:column; align-items:flex-start">
+                    <label style="width:auto; margin-bottom:6px">OCR Models (multi-select for comparison)</label>
+                    <div style="display:flex; flex-direction:column; gap:6px; font-size:13px">
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="checkbox" class="model-checkbox" value="gemini-3-flash-preview" checked>
+                            <span>Gemini 3 Flash Preview <span style="color:var(--ink-muted)">(default, best accuracy)</span></span>
+                        </label>
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="checkbox" class="model-checkbox" value="gemini-2.0-flash">
+                            <span>Gemini 2.0 Flash <span style="color:var(--ink-muted)">(faster, good quality)</span></span>
+                        </label>
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="checkbox" class="model-checkbox" value="gemini-2.5-flash-lite">
+                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">(fastest, cheapest)</span></span>
+                        </label>
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="checkbox" class="model-checkbox" value="gemini-2.5-pro">
+                            <span>Gemini 2.5 Pro <span style="color:var(--ink-muted)">(slowest, highest quality)</span></span>
+                        </label>
+                    </div>
+                </div>
             </div>
 
             <div class="results-panel" id="results-panel">
@@ -1911,12 +2067,24 @@ BROWSER_CAMERA_TEMPLATE = '''
         }
     }
 
+    function getSelectedModels() {
+        const checkboxes = document.querySelectorAll('.model-checkbox:checked');
+        return Array.from(checkboxes).map(cb => cb.value);
+    }
+
     function runOCR() {
         const sessionName = document.getElementById('session-name').textContent;
+        const models = getSelectedModels();
+        if (models.length === 0) {
+            document.getElementById('status-text').textContent = 'Select at least one model';
+            document.getElementById('status-text').className = 'status-text error';
+            setAppState('idle');
+            return;
+        }
         fetch('/run_ocr', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: sessionName })
+            body: JSON.stringify({ session: sessionName, models: models })
         })
         .then(r => r.json())
         .then(data => {
@@ -2751,10 +2919,247 @@ HTML_TEMPLATE = '''
 '''
 
 
+LIBRARY_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Library — Doodle Scanner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --ink: #1a1a1a;
+            --ink-soft: #3d3d3d;
+            --ink-muted: #6b6b6b;
+            --cream: #faf8f5;
+            --cream-warm: #f5f2ed;
+            --surface: #ffffff;
+            --border: #d4d0c8;
+            --accent: #4f46e5;
+            --accent-soft: #e0e7ff;
+            --success: #16a34a;
+            --error: #dc2626;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--cream);
+            color: var(--ink);
+            min-height: 100vh;
+            padding: 24px;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+        .back-link {
+            display: inline-flex; align-items: center; gap: 6px;
+            text-decoration: none; color: var(--ink-muted); font-size: 14px;
+            margin-bottom: 24px;
+        }
+        .back-link:hover { color: var(--ink); }
+        h1 {
+            font-family: 'Cormorant Garamond', Georgia, serif;
+            font-size: 32px; font-weight: 600; margin-bottom: 8px;
+        }
+        .subtitle { color: var(--ink-muted); font-size: 14px; margin-bottom: 32px; }
+        .library-table {
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .library-header {
+            display: grid;
+            grid-template-columns: 1fr 80px 70px 100px 180px 120px;
+            gap: 12px;
+            padding: 12px 20px;
+            background: var(--cream-warm);
+            border-bottom: 1px solid var(--border);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--ink-muted);
+        }
+        .library-row {
+            display: grid;
+            grid-template-columns: 1fr 80px 70px 100px 180px 120px;
+            gap: 12px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 14px;
+            align-items: center;
+            transition: background 0.1s;
+        }
+        .library-row:last-child { border-bottom: none; }
+        .library-row:hover { background: var(--cream); }
+        .item-title {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .type-badge.scan { background: var(--accent-soft); color: var(--accent); }
+        .type-badge.upload { background: #fef3c7; color: #92400e; }
+        .status-dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        .status-dot.complete { background: var(--success); }
+        .status-dot.pending { background: var(--border); }
+        .status-dot.processing { background: #f59e0b; }
+        .status-dot.error { background: var(--error); }
+        .actions a, .actions button {
+            font-size: 12px;
+            color: var(--accent);
+            text-decoration: none;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .actions a:hover, .actions button:hover {
+            background: var(--accent-soft);
+        }
+        .empty-state {
+            padding: 60px 20px;
+            text-align: center;
+            color: var(--ink-muted);
+        }
+        .empty-state h3 { margin-bottom: 8px; color: var(--ink-soft); }
+        .stats-bar {
+            display: flex; gap: 24px; margin-bottom: 24px;
+        }
+        .stat {
+            font-size: 13px; color: var(--ink-muted);
+        }
+        .stat strong { color: var(--ink); font-size: 20px; display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">&larr; Back to Doodle Scanner</a>
+        <h1>Library</h1>
+        <p class="subtitle">All your scanned and uploaded documents</p>
+
+        <div class="stats-bar" id="stats-bar"></div>
+
+        <div class="library-table">
+            <div class="library-header">
+                <span>Title</span>
+                <span>Type</span>
+                <span>Pages</span>
+                <span>Status</span>
+                <span>Date</span>
+                <span>Actions</span>
+            </div>
+            <div id="library-body">
+                <div class="empty-state">
+                    <h3>Loading...</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    async function loadLibrary() {
+        const res = await fetch('/api/library');
+        const data = await res.json();
+        const items = data.items || [];
+        const body = document.getElementById('library-body');
+
+        // Stats
+        const total = items.length;
+        const complete = items.filter(i => i.status === 'complete').length;
+        const totalPages = items.reduce((s, i) => s + (i.pages || 0), 0);
+        document.getElementById('stats-bar').innerHTML =
+            `<div class="stat"><strong>${total}</strong>Documents</div>` +
+            `<div class="stat"><strong>${complete}</strong>Transcribed</div>` +
+            `<div class="stat"><strong>${totalPages}</strong>Total pages</div>`;
+
+        if (items.length === 0) {
+            body.innerHTML = '<div class="empty-state">' +
+                '<h3>No documents yet</h3>' +
+                '<p>Scan a book or upload a PDF to get started.</p></div>';
+            return;
+        }
+
+        body.innerHTML = items.map(item => {
+            const typeClass = item.type === 'scan' ? 'scan' : 'upload';
+            const typeLabel = item.type === 'scan' ? 'Scan' : 'Upload';
+            const statusClass = item.status || 'pending';
+
+            let actions = '';
+            if (item.has_ocr && item.type === 'scan') {
+                actions += `<a href="/session_ocr/${item.id}" target="_blank">Download</a>`;
+            } else if (item.has_ocr && item.type === 'upload') {
+                actions += `<a href="/api/jobs/${item.id}/download" target="_blank">Download</a>`;
+            }
+            if (!item.has_ocr && item.type === 'scan' && item.pages > 0) {
+                actions += `<button onclick="runOCR('${item.id}')">Run OCR</button>`;
+            }
+
+            return `<div class="library-row">
+                <span class="item-title" title="${item.title}">${item.title}</span>
+                <span><span class="type-badge ${typeClass}">${typeLabel}</span></span>
+                <span>${item.pages}</span>
+                <span><span class="status-dot ${statusClass}"></span>${statusClass}</span>
+                <span>${item.date}</span>
+                <span class="actions">${actions}</span>
+            </div>`;
+        }).join('');
+    }
+
+    async function runOCR(sessionId) {
+        const res = await fetch('/run_ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: sessionId })
+        });
+        const data = await res.json();
+        if (data.ok) {
+            // Reload after a delay to show progress
+            setTimeout(loadLibrary, 2000);
+        } else {
+            alert('OCR Error: ' + (data.error || 'Unknown'));
+        }
+    }
+
+    loadLibrary();
+    // Auto-refresh every 5 seconds to catch OCR completions
+    setInterval(loadLibrary, 5000);
+    </script>
+</body>
+</html>
+'''
+
+
 @app.route('/')
 def landing():
     """Landing page with two routes: Upload or Camera."""
     return render_template_string(LANDING_PAGE)
+
+
+@app.route('/library')
+def library_page():
+    """Library page — browse all past scans and uploads."""
+    return render_template_string(LIBRARY_PAGE)
+
+
+@app.route('/api/library')
+def api_library():
+    """API: Get all library items (sessions + uploads)."""
+    return jsonify({'items': _get_library_items()})
 
 
 @app.route('/upload')
@@ -2938,11 +3343,12 @@ def list_sessions():
 
 @app.route('/run_ocr', methods=['POST'])
 def run_ocr():
-    """Run OCR on a session using Gemini 2.0 Flash."""
+    """Run OCR on a session. Supports multi-model comparison."""
     data = request.json or {}
     session_name = data.get('session') or page_snap.session_name
+    models = data.get('models')  # list of model names, or None for default
 
-    started, error = page_snap.trigger_ocr(session_name)
+    started, error = page_snap.trigger_ocr(session_name, models=models)
     if error:
         code = 404 if "Session not found" in error else 409 if "already running" in error else 400
         return jsonify({'error': error}), code
