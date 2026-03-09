@@ -1559,6 +1559,13 @@ BROWSER_CAMERA_TEMPLATE = '''
             gap: 4px;
         }
         .secondary-actions a:hover { color: var(--accent); }
+        .photo-upload-label {
+            color: var(--accent);
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        .photo-upload-label:hover { text-decoration: underline; }
         .settings-panel {
             display: none;
             background: var(--cream-warm);
@@ -1809,6 +1816,11 @@ BROWSER_CAMERA_TEMPLATE = '''
                     Start Scanning
                 </button>
                 <div class="secondary-actions">
+                    <label class="photo-upload-label" id="photo-upload-label">
+                        <input type="file" accept="image/*" capture="environment" multiple
+                               id="photo-upload" onchange="handlePhotoUpload(this.files)" style="display:none">
+                        📸 Take Photo / Upload Images
+                    </label>
                     <a href="#" onclick="toggleSettings(); return false;">Settings</a>
                     <a href="#" onclick="newSession(); return false;">+ New Session</a>
                 </div>
@@ -1958,20 +1970,14 @@ BROWSER_CAMERA_TEMPLATE = '''
 
         statusText.textContent = 'Requesting camera access...';
 
-        // Timeout: if getUserMedia hangs for 8 seconds, show help
+        // Timeout: if getUserMedia hangs for 5 seconds, show help
         let cameraTimedOut = false;
         const cameraTimeout = setTimeout(() => {
             cameraTimedOut = true;
-            statusText.textContent = 'Camera not responding';
-            area.innerHTML = '<div class="camera-error">' +
-                '<h2>Camera Not Responding</h2>' +
-                '<p>The camera permission prompt may be hidden or blocked.</p>' +
-                '<p style="font-size:13px;color:var(--ink-muted)"><strong>Mac:</strong> System Settings → Privacy &amp; Security → Camera → enable your browser</p>' +
-                '<p style="font-size:13px;color:var(--ink-muted)"><strong>iOS:</strong> Settings → Safari → Camera → Allow</p>' +
-                '<p style="font-size:13px;color:var(--ink-muted)"><strong>Chrome:</strong> Click the lock icon in the address bar → Camera → Allow</p>' +
-                '<p style="margin-top:16px"><a href="/upload" style="color:var(--accent)">Upload a PDF instead →</a></p>' +
-                '</div>';
-        }, 8000);
+            statusText.textContent = 'Camera not responding — use photo upload below';
+            statusText.className = 'status-text error';
+            // Don't replace camera area — just show the message. User can still use photo upload button.
+        }, 5000);
 
         try {
             const constraints = {
@@ -1983,70 +1989,41 @@ BROWSER_CAMERA_TEMPLATE = '''
             };
             cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
             clearTimeout(cameraTimeout);
-            if (cameraTimedOut) {
-                // Timeout already fired but camera came through — restore the video area
-                area.innerHTML = '';
-                const videoEl = document.createElement('video');
-                videoEl.id = 'camera-video';
-                videoEl.setAttribute('autoplay', '');
-                videoEl.setAttribute('playsinline', '');
-                videoEl.style.width = '100%';
-                videoEl.style.display = 'block';
-                area.appendChild(videoEl);
-                // Re-add overlays
-                const statusBar = document.createElement('div');
-                statusBar.className = 'status-bar';
-                statusBar.innerHTML = '<span class="status-text" id="status-text">Ready to scan</span><span class="page-count" id="page-count">0 pages</span>';
-                area.appendChild(statusBar);
-                videoEl.srcObject = cameraStream;
-                await videoEl.play();
-                captureCanvas.width = videoEl.videoWidth;
-                captureCanvas.height = videoEl.videoHeight;
-                detectCanvas.width = Math.round(videoEl.videoWidth * config.detectionScale);
-                detectCanvas.height = Math.round(videoEl.videoHeight * config.detectionScale);
-            } else {
-                video.srcObject = cameraStream;
-                await video.play();
 
-                // Set capture canvas to full video resolution
-                video.addEventListener('loadedmetadata', () => {
-                    captureCanvas.width = video.videoWidth;
-                    captureCanvas.height = video.videoHeight;
-                    // Detection canvas is scaled down
-                    detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
-                    detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
-                    // Show camera resolution badge
-                    showImageSize();
-                    // Position bounding box if a preset is active
-                    updateBoundingBox();
-                });
-            }
+            video.srcObject = cameraStream;
+            await video.play();
+
+            // Set capture canvas to full video resolution
+            video.addEventListener('loadedmetadata', () => {
+                captureCanvas.width = video.videoWidth;
+                captureCanvas.height = video.videoHeight;
+                detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
+                detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
+                showImageSize();
+                updateBoundingBox();
+            });
 
             statusText.textContent = 'Ready to scan';
+            statusText.className = 'status-text scanning';
             document.getElementById('main-button').disabled = false;
         } catch (err) {
             clearTimeout(cameraTimeout);
-            if (cameraTimedOut) return; // Already showing timeout message
-            let msg = '';
+            console.error('Camera error:', err.name, err.message);
+
+            let hint = 'Camera unavailable';
             if (err.name === 'NotAllowedError') {
-                msg = '<h2>Camera Access Denied</h2>' +
-                    '<p>Please allow camera access in your browser settings.</p>' +
-                    '<p style="font-size:13px;color:var(--ink-muted)"><strong>Mac:</strong> System Settings → Privacy &amp; Security → Camera → enable your browser</p>' +
-                    '<p style="font-size:13px;color:var(--ink-muted)"><strong>iOS:</strong> Settings → Safari → Camera → Allow</p>' +
-                    '<p style="font-size:13px;color:var(--ink-muted)"><strong>Chrome:</strong> Click the lock icon in the address bar → Camera → Allow</p>';
+                hint = 'Camera denied — check browser permissions';
             } else if (err.name === 'NotFoundError') {
-                msg = '<h2>No Camera Found</h2>' +
-                    '<p>No camera detected on this device.</p>';
+                hint = 'No camera found on this device';
             } else if (err.name === 'NotReadableError') {
-                msg = '<h2>Camera In Use</h2>' +
-                    '<p>Camera is being used by another app. Close it and try again.</p>';
+                hint = 'Camera in use by another app';
             } else {
-                msg = '<h2>Camera Error</h2>' +
-                    '<p>' + err.message + '</p>';
+                hint = err.message || 'Camera error';
             }
-            msg += '<p style="font-size:11px;color:#999;margin-top:12px">' + err.name + ': ' + err.message + '</p>';
-            msg += '<p style="margin-top:16px"><a href="/upload" style="color:var(--accent)">Upload a PDF instead →</a></p>';
-            area.innerHTML = '<div class="camera-error">' + msg + '</div>';
+
+            statusText.textContent = hint + ' — use photo upload below';
+            statusText.className = 'status-text error';
+            // Don't block the page — photo upload still works
         }
     }
 
@@ -2213,6 +2190,45 @@ BROWSER_CAMERA_TEMPLATE = '''
 
     function manualCapture() {
         captureFrame();
+    }
+
+    // ===== Photo Upload Fallback =====
+    async function handlePhotoUpload(files) {
+        if (!files || files.length === 0) return;
+        const statusText = document.getElementById('status-text');
+        statusText.textContent = 'Uploading ' + files.length + ' photo(s)...';
+        statusText.className = 'status-text processing';
+
+        for (const file of files) {
+            const reader = new FileReader();
+            const dataUrl = await new Promise((resolve) => {
+                reader.onload = () => resolve(reader.result);
+                reader.readAsDataURL(file);
+            });
+
+            const res = await fetch('/api/capture', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataUrl })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                captureCount = data.capture_count;
+                document.getElementById('page-count').textContent =
+                    captureCount + ' page' + (captureCount !== 1 ? 's' : '');
+            }
+        }
+
+        statusText.textContent = captureCount + ' pages captured';
+        statusText.className = 'status-text scanning';
+        // Enable the main button so they can process
+        document.getElementById('main-button').disabled = false;
+        document.getElementById('main-button').textContent = 'Process OCR';
+        document.getElementById('main-button').className = 'main-button btn-stop';
+        appState = 'scanning';
+
+        // Reset file input so same files can be re-selected
+        document.getElementById('photo-upload').value = '';
     }
 
     // ===== App State Machine =====
