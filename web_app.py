@@ -483,7 +483,7 @@ class PDFJobManager:
         thread.start()
         return True, None
 
-    def start_processing(self, job_id: str, preferences: dict = None):
+    def start_processing(self, job_id: str, preferences: dict = None, model: str = None):
         """Start processing a PDF job in background thread."""
         job = self.get_job(job_id)
         if not job:
@@ -496,6 +496,10 @@ class PDFJobManager:
         if preferences:
             self.update_job(job_id, preferences=preferences)
             job['preferences'] = preferences
+
+        # Store model selection
+        if model:
+            job['model'] = model
 
         def worker():
             try:
@@ -532,6 +536,7 @@ class PDFJobManager:
                     progress_callback=progress_callback,
                     preferences=job.get('preferences'),
                     analysis=job.get('analysis'),  # Pass pre-computed analysis
+                    model=job.get('model'),
                 )
 
                 # Check for partial failures
@@ -1138,6 +1143,28 @@ UPLOAD_PAGE = '''
                         <span class="pref-detail">(fixes broken sentences, removes duplicate headers)</span>
                     </label>
                 </div>
+
+                <div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin: 0 0 12px; color: var(--ink-soft);">OCR Model</h3>
+                    <div style="display:flex; flex-direction:column; gap:6px; font-size:13px">
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="radio" name="ocr-model" value="gemini-3-flash-preview" checked>
+                            <span>Gemini 3 Flash Preview <span style="color:var(--ink-muted)">(default, best accuracy)</span></span>
+                        </label>
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="radio" name="ocr-model" value="gemini-2.0-flash">
+                            <span>Gemini 2.0 Flash <span style="color:var(--ink-muted)">(faster, good quality)</span></span>
+                        </label>
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="radio" name="ocr-model" value="gemini-2.5-flash-lite">
+                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">(fastest, cheapest)</span></span>
+                        </label>
+                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                            <input type="radio" name="ocr-model" value="gemini-2.5-pro">
+                            <span>Gemini 2.5 Pro <span style="color:var(--ink-muted)">(slowest, highest quality)</span></span>
+                        </label>
+                    </div>
+                </div>
             </div>
 
             <div class="modal-actions">
@@ -1389,10 +1416,14 @@ UPLOAD_PAGE = '''
                     smooth_boundaries: document.getElementById('pref-smooth-boundaries').checked,
                 };
 
+                // Get selected OCR model
+                const selectedModel = document.querySelector('input[name="ocr-model"]:checked');
+                const model = selectedModel ? selectedModel.value : 'gemini-3-flash-preview';
+
                 fetch('/api/jobs/' + pendingJobId + '/start', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ preferences })
+                    body: JSON.stringify({ preferences, model })
                 })
                     .then(() => {
                         closeModal();
@@ -3868,7 +3899,8 @@ def api_start_job(job_id):
     except Exception:
         data = {}
     preferences = data.get('preferences')
-    success, error = pdf_manager.start_processing(job_id, preferences=preferences)
+    model = data.get('model')
+    success, error = pdf_manager.start_processing(job_id, preferences=preferences, model=model)
     if not success:
         return jsonify({'error': error}), 400
     return jsonify({'ok': True})
