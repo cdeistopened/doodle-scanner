@@ -639,6 +639,8 @@ def process_pdf(
     preferences: Dict[str, Any] = None,
     analysis: Dict[str, Any] = None,
     model: str = None,
+    page_start: int = None,
+    page_end: int = None,
 ) -> Dict[str, Any]:
     """
     Process a PDF with intelligent chunking.
@@ -674,11 +676,17 @@ def process_pdf(
     # Build prompt with user preferences
     prompt = build_ocr_prompt(analysis, preferences)
 
-    # Calculate chunks
+    # Apply page range if specified (1-indexed from user, convert to 0-indexed)
+    range_start = (page_start - 1) if page_start and page_start >= 1 else 0
+    range_end = min(page_end, total_pages) if page_end and page_end >= 1 else total_pages
+    range_end = max(range_end, range_start)  # Sanity check
+    effective_pages = range_end - range_start
+
+    # Calculate chunks within the selected range
     chunks = []
-    start = 0
-    while start < total_pages:
-        end = min(start + chunk_size, total_pages)
+    start = range_start
+    while start < range_end:
+        end = min(start + chunk_size, range_end)
         chunks.append((start, end))
         start = end
 
@@ -693,7 +701,7 @@ def process_pdf(
         page_range = f"Pages {start_page + 1}-{end_page}"
 
         if progress_callback:
-            progress_callback(start_page, total_pages, f"Chunk {chunk_num}/{len(chunks)}: {page_range}")
+            progress_callback(start_page - range_start, effective_pages, f"Chunk {chunk_num}/{len(chunks)}: {page_range}")
 
         try:
             # Rate limiting between chunks

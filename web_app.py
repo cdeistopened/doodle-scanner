@@ -483,7 +483,7 @@ class PDFJobManager:
         thread.start()
         return True, None
 
-    def start_processing(self, job_id: str, preferences: dict = None, model: str = None):
+    def start_processing(self, job_id: str, preferences: dict = None, model: str = None, page_start: int = None, page_end: int = None):
         """Start processing a PDF job in background thread."""
         job = self.get_job(job_id)
         if not job:
@@ -500,6 +500,12 @@ class PDFJobManager:
         # Store model selection
         if model:
             job['model'] = model
+
+        # Store page range
+        if page_start is not None:
+            job['page_start'] = page_start
+        if page_end is not None:
+            job['page_end'] = page_end
 
         def worker():
             try:
@@ -537,6 +543,8 @@ class PDFJobManager:
                     preferences=job.get('preferences'),
                     analysis=job.get('analysis'),  # Pass pre-computed analysis
                     model=job.get('model'),
+                    page_start=job.get('page_start'),
+                    page_end=job.get('page_end'),
                 )
 
                 # Check for partial failures
@@ -841,14 +849,15 @@ UPLOAD_PAGE = '''
     <style>
         :root {
             --ink: #1a1a1a;
-            --ink-soft: #3d3d3d;
-            --ink-muted: #6b6b6b;
-            --cream: #faf8f5;
-            --cream-warm: #f5f2ed;
+            --ink-soft: #444;
+            --ink-muted: #7a7a7a;
+            --bg: #f7f7f8;
+            --cream: #f7f7f8;
+            --cream-warm: #f0eff2;
             --surface: #ffffff;
-            --border: #d4d0c8;
-            --accent: #4f46e5;
-            --accent-soft: #e0e7ff;
+            --border: #e5e5e7;
+            --accent: #6c4bf4;
+            --accent-soft: #ede8ff;
             --success: #16a34a;
             --error: #dc2626;
             --warning: #d97706;
@@ -856,32 +865,31 @@ UPLOAD_PAGE = '''
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--cream);
+            background: var(--bg);
             color: var(--ink);
             min-height: 100vh;
-            padding: 24px;
+            padding: 32px 24px;
         }
-        .container { max-width: 800px; margin: 0 auto; }
+        .container { max-width: 720px; margin: 0 auto; }
         .back-link {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            font-size: 14px;
-            color: var(--accent);
+            font-size: 13px;
+            color: var(--ink-muted);
             text-decoration: none;
-            margin-bottom: 24px;
+            margin-bottom: 28px;
             font-weight: 500;
         }
-        .back-link:hover { text-decoration: underline; }
+        .back-link:hover { color: var(--ink); }
         .header {
-            margin-bottom: 32px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid var(--border);
+            margin-bottom: 28px;
         }
         .header h1 {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 32px;
-            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
         }
         .header .subtitle {
             font-size: 14px;
@@ -889,8 +897,8 @@ UPLOAD_PAGE = '''
             margin-top: 4px;
         }
         .upload-zone {
-            border: 3px dashed var(--border);
-            border-radius: 12px;
+            border: 2px dashed var(--border);
+            border-radius: 16px;
             padding: 48px;
             text-align: center;
             margin-bottom: 24px;
@@ -907,60 +915,70 @@ UPLOAD_PAGE = '''
             opacity: 0.7;
             pointer-events: none;
         }
-        .upload-icon { font-size: 48px; margin-bottom: 16px; }
+        .upload-icon { font-size: 36px; margin-bottom: 12px; }
         .upload-text {
-            font-size: 16px;
-            font-weight: 500;
-            margin-bottom: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 6px;
         }
         .upload-hint {
-            font-size: 13px;
+            font-size: 12px;
             color: var(--ink-muted);
         }
         #file-input { display: none; }
 
         .jobs-section {
             background: var(--surface);
-            border: 2px solid var(--border);
-            border-radius: 12px;
+            border: 1px solid var(--border);
+            border-radius: 16px;
             padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
         }
         .jobs-section h2 {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 20px;
-            font-weight: 600;
+            font-size: 15px;
+            font-weight: 700;
             margin-bottom: 16px;
+            letter-spacing: -0.01em;
         }
         .job-list { list-style: none; }
         .job-item {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            padding: 16px;
+            align-items: flex-start;
+            padding: 14px 0;
             border-bottom: 1px solid var(--border);
         }
         .job-item:last-child { border-bottom: none; }
         .job-name {
-            font-weight: 500;
-            margin-bottom: 4px;
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 3px;
         }
         .job-meta {
-            font-size: 13px;
+            font-size: 12px;
             color: var(--ink-muted);
         }
         .job-status {
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 12px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
             font-weight: 600;
+            white-space: nowrap;
         }
         .status-pending { background: var(--cream-warm); color: var(--ink-muted); }
-        .status-analyzing { background: #fef3c7; color: #d97706; }
+        .status-analyzing { background: #fef3c7; color: #b45309; }
         .status-analyzed { background: #dbeafe; color: #2563eb; }
         .status-processing { background: var(--accent-soft); color: var(--accent); }
         .status-complete { background: #dcfce7; color: var(--success); }
         .status-error { background: #fee2e2; color: var(--error); }
         .job-actions { display: flex; gap: 8px; margin-top: 8px; }
+        .chunk-links { margin-top: 6px; font-size: 11px; }
+        .chunk-links a {
+            color: var(--accent);
+            text-decoration: none;
+            margin-right: 6px;
+        }
+        .chunk-links a:hover { text-decoration: underline; }
 
         /* Analysis Modal */
         .modal-overlay {
@@ -975,17 +993,54 @@ UPLOAD_PAGE = '''
         .modal-overlay.active { display: flex; }
         .modal {
             background: var(--surface);
-            border-radius: 12px;
-            padding: 32px;
-            max-width: 500px;
-            width: 90%;
-            max-height: 80vh;
+            border-radius: 20px;
+            padding: 28px;
+            max-width: 520px;
+            width: 92%;
+            max-height: 85vh;
             overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
         }
         .modal h2 {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 24px;
+            font-size: 18px;
+            font-weight: 700;
             margin-bottom: 16px;
+            letter-spacing: -0.01em;
+        }
+        .settings-toggle {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--ink-soft);
+            cursor: pointer;
+            padding: 10px 0 6px;
+            list-style: none;
+            user-select: none;
+        }
+        .settings-toggle::-webkit-details-marker { display: none; }
+        .settings-toggle::before {
+            content: '▸ ';
+            font-size: 11px;
+            color: var(--ink-muted);
+        }
+        details[open] > .settings-toggle::before { content: '▾ '; }
+        .page-range-section {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 0;
+            font-size: 13px;
+        }
+        .page-range-section input[type="number"] {
+            width: 64px;
+            padding: 6px 8px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 13px;
+            text-align: center;
+        }
+        .page-range-section label {
+            color: var(--ink-muted);
+            font-size: 12px;
         }
         .analysis-item {
             display: flex;
@@ -1015,20 +1070,21 @@ UPLOAD_PAGE = '''
         }
         .modal-btn {
             flex: 1;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 14px;
+            padding: 11px 20px;
+            border-radius: 12px;
+            font-size: 13px;
             font-weight: 600;
             cursor: pointer;
-            border: 2px solid var(--border);
+            border: 1px solid var(--border);
             background: var(--surface);
+            transition: all 0.15s;
         }
         .modal-btn.primary {
             background: var(--accent);
             border-color: var(--accent);
             color: white;
         }
-        .modal-btn:hover { opacity: 0.9; }
+        .modal-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
         .preferences-section {
             border-top: 1px solid var(--border);
             padding-top: 16px;
@@ -1053,17 +1109,18 @@ UPLOAD_PAGE = '''
             font-style: italic;
         }
         .job-btn {
-            padding: 6px 12px;
-            font-size: 12px;
+            padding: 5px 12px;
+            font-size: 11px;
             font-weight: 600;
             border: 1px solid var(--border);
-            border-radius: 4px;
+            border-radius: 8px;
             cursor: pointer;
             background: var(--surface);
             color: var(--ink);
             text-decoration: none;
+            transition: all 0.15s;
         }
-        .job-btn:hover { background: var(--cream); }
+        .job-btn:hover { background: var(--cream-warm); }
         .job-btn.primary {
             background: var(--accent);
             color: white;
@@ -1149,36 +1206,45 @@ UPLOAD_PAGE = '''
             <h2>📊 Document Analysis</h2>
             <div id="analysis-content"></div>
 
-            <div class="preferences-section">
-                <h3 style="font-size: 14px; font-weight: 600; margin: 20px 0 12px; color: var(--ink-soft);">Output Preferences</h3>
+            <!-- Page Range -->
+            <div class="page-range-section">
+                <span style="font-weight:600">Pages:</span>
+                <input type="number" id="page-start" min="1" value="1">
+                <span style="color:var(--ink-muted)">to</span>
+                <input type="number" id="page-end" min="1" value="1">
+                <label>(of <span id="page-total">?</span>)</label>
+            </div>
 
-                <label class="preference-item">
-                    <input type="checkbox" id="pref-strip-headers" checked>
-                    <span>Strip running headers</span>
-                    <span class="pref-detail" id="header-detail"></span>
-                </label>
+            <!-- Settings in collapsible -->
+            <details>
+                <summary class="settings-toggle">Settings</summary>
+                <div style="padding: 8px 0 4px;">
+                    <label class="preference-item">
+                        <input type="checkbox" id="pref-strip-headers" checked>
+                        <span>Strip running headers</span>
+                        <span class="pref-detail" id="header-detail"></span>
+                    </label>
 
-                <label class="preference-item">
-                    <input type="checkbox" id="pref-strip-footers" checked>
-                    <span>Strip running footers</span>
-                    <span class="pref-detail" id="footer-detail"></span>
-                </label>
+                    <label class="preference-item">
+                        <input type="checkbox" id="pref-strip-footers" checked>
+                        <span>Strip running footers</span>
+                        <span class="pref-detail" id="footer-detail"></span>
+                    </label>
 
-                <label class="preference-item">
-                    <input type="checkbox" id="pref-page-breaks">
-                    <span>Include page breaks (---)</span>
-                </label>
+                    <label class="preference-item">
+                        <input type="checkbox" id="pref-page-breaks">
+                        <span>Include page breaks (---)</span>
+                    </label>
 
-                <label class="preference-item">
-                    <input type="checkbox" id="pref-page-numbers">
-                    <span>Include page numbers</span>
-                </label>
+                    <label class="preference-item">
+                        <input type="checkbox" id="pref-page-numbers">
+                        <span>Include page numbers</span>
+                    </label>
 
-                <div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">
                     <label class="preference-item">
                         <input type="checkbox" id="pref-smooth-boundaries" checked>
                         <span>AI boundary smoothing</span>
-                        <span class="pref-detail">(fixes broken sentences, removes duplicate headers)</span>
+                        <span class="pref-detail">(fixes broken sentences)</span>
                     </label>
                 </div>
 
@@ -1291,7 +1357,8 @@ UPLOAD_PAGE = '''
 
                         let actions = '';
                         if (job.status === 'complete' && job.output_path) {
-                            actions = `<a href="/api/jobs/${job.id}/download" class="job-btn primary">Download</a>`;
+                            actions = `<a href="/api/jobs/${job.id}/download" class="job-btn primary">Download</a>
+                                       <button onclick="toggleChunks('${job.id}', ${job.chunks_total || 0})" class="job-btn">Chunks</button>`;
                         } else if (job.status === 'pending') {
                             actions = `<button onclick="analyzeJob('${job.id}')" class="job-btn primary">Analyze</button>`;
                         } else if (job.status === 'analyzed') {
@@ -1345,11 +1412,12 @@ UPLOAD_PAGE = '''
 
                         return `
                             <li class="job-item">
-                                <div>
+                                <div style="flex:1">
                                     <div class="job-name">${job.filename}</div>
                                     <div class="job-meta">${meta}</div>
                                     ${progress}
                                     <div class="job-actions">${actions}</div>
+                                    <div class="chunk-links" id="chunks-${job.id}" style="display:none"></div>
                                 </div>
                                 <span class="job-status ${statusClass}">${statusText}</span>
                             </li>
@@ -1373,6 +1441,32 @@ UPLOAD_PAGE = '''
         function retryJob(jobId) {
             fetch('/api/jobs/' + jobId + '/start', { method: 'POST' })
                 .then(() => refreshJobs());
+        }
+
+        function toggleChunks(jobId, totalChunks) {
+            const el = document.getElementById('chunks-' + jobId);
+            if (!el) return;
+            if (el.style.display !== 'none') {
+                el.style.display = 'none';
+                return;
+            }
+            if (totalChunks === 0) {
+                el.innerHTML = '<span style="color:var(--ink-muted)">No chunk data</span>';
+                el.style.display = 'block';
+                return;
+            }
+            fetch('/api/jobs/' + jobId + '/chunks')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.chunks && data.chunks.length) {
+                        el.innerHTML = data.chunks.map((c, i) =>
+                            `<a href="/api/jobs/${jobId}/chunks/${i+1}/download" title="${c.pages}">${c.label}</a>`
+                        ).join('');
+                    } else {
+                        el.innerHTML = '<span style="color:var(--ink-muted)">Chunks not saved</span>';
+                    }
+                    el.style.display = 'block';
+                });
         }
 
         function analyzeJob(jobId) {
@@ -1462,6 +1556,13 @@ UPLOAD_PAGE = '''
                 footerDetail.textContent = '(none detected)';
             }
 
+            // Set page range inputs
+            document.getElementById('page-start').value = 1;
+            document.getElementById('page-start').max = job.page_count;
+            document.getElementById('page-end').value = job.page_count;
+            document.getElementById('page-end').max = job.page_count;
+            document.getElementById('page-total').textContent = job.page_count;
+
             // Store base cost for model-based recalculation
             baseCostUsd = a.estimated_cost_usd || 0;
 
@@ -1519,10 +1620,14 @@ UPLOAD_PAGE = '''
                 const selectedModel = document.querySelector('input[name="ocr-model"]:checked');
                 const model = selectedModel ? selectedModel.value : 'gemini-3-flash-preview';
 
+                // Page range (0-indexed for backend)
+                const pageStart = parseInt(document.getElementById('page-start').value) - 1;
+                const pageEnd = parseInt(document.getElementById('page-end').value);
+
                 fetch('/api/jobs/' + pendingJobId + '/start', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ preferences, model })
+                    body: JSON.stringify({ preferences, model, page_start: pageStart, page_end: pageEnd })
                 })
                     .then(() => {
                         closeModal();
@@ -3999,10 +4104,58 @@ def api_start_job(job_id):
         data = {}
     preferences = data.get('preferences')
     model = data.get('model')
-    success, error = pdf_manager.start_processing(job_id, preferences=preferences, model=model)
+    page_start = data.get('page_start')  # 0-indexed
+    page_end = data.get('page_end')      # exclusive
+    success, error = pdf_manager.start_processing(job_id, preferences=preferences, model=model, page_start=page_start, page_end=page_end)
     if not success:
         return jsonify({'error': error}), 400
     return jsonify({'ok': True})
+
+
+@app.route('/api/jobs/<job_id>/chunks')
+def api_list_chunks(job_id):
+    """List individual chunk files for a completed job."""
+    job = pdf_manager.get_job(job_id)
+    if not job or not job.get('output_path'):
+        return jsonify({'chunks': []})
+
+    chunks_dir = Path(job['output_path']).parent / "chunks"
+    if not chunks_dir.exists():
+        return jsonify({'chunks': []})
+
+    chunk_files = sorted(chunks_dir.glob(f"{Path(job['output_path']).stem.replace('_ocr', '')}_chunk*.md"))
+    chunks = []
+    for i, cf in enumerate(chunk_files):
+        # Read first line for page info
+        with open(cf) as f:
+            first_line = f.readline().strip()
+        pages = first_line.replace('<!-- ', '').replace(' -->', '').split(': ')[-1] if '<!--' in first_line else f'Chunk {i+1}'
+        chunks.append({
+            'label': f'Ch.{i+1}',
+            'pages': pages,
+            'filename': cf.name,
+        })
+    return jsonify({'chunks': chunks})
+
+
+@app.route('/api/jobs/<job_id>/chunks/<int:chunk_num>/download')
+def api_download_chunk(job_id, chunk_num):
+    """Download a specific chunk file."""
+    job = pdf_manager.get_job(job_id)
+    if not job or not job.get('output_path'):
+        return jsonify({'error': 'Job not found'}), 404
+
+    chunks_dir = Path(job['output_path']).parent / "chunks"
+    chunk_files = sorted(chunks_dir.glob(f"{Path(job['output_path']).stem.replace('_ocr', '')}_chunk*.md"))
+
+    if chunk_num < 1 or chunk_num > len(chunk_files):
+        return jsonify({'error': 'Chunk not found'}), 404
+
+    return send_file(
+        str(chunk_files[chunk_num - 1]),
+        as_attachment=True,
+        download_name=chunk_files[chunk_num - 1].name
+    )
 
 
 @app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
