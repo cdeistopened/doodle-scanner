@@ -1958,6 +1958,21 @@ BROWSER_CAMERA_TEMPLATE = '''
 
         statusText.textContent = 'Requesting camera access...';
 
+        // Timeout: if getUserMedia hangs for 8 seconds, show help
+        let cameraTimedOut = false;
+        const cameraTimeout = setTimeout(() => {
+            cameraTimedOut = true;
+            statusText.textContent = 'Camera not responding';
+            area.innerHTML = '<div class="camera-error">' +
+                '<h2>Camera Not Responding</h2>' +
+                '<p>The camera permission prompt may be hidden or blocked.</p>' +
+                '<p style="font-size:13px;color:var(--ink-muted)"><strong>Mac:</strong> System Settings → Privacy &amp; Security → Camera → enable your browser</p>' +
+                '<p style="font-size:13px;color:var(--ink-muted)"><strong>iOS:</strong> Settings → Safari → Camera → Allow</p>' +
+                '<p style="font-size:13px;color:var(--ink-muted)"><strong>Chrome:</strong> Click the lock icon in the address bar → Camera → Allow</p>' +
+                '<p style="margin-top:16px"><a href="/upload" style="color:var(--accent)">Upload a PDF instead →</a></p>' +
+                '</div>';
+        }, 8000);
+
         try {
             const constraints = {
                 video: {
@@ -1967,31 +1982,58 @@ BROWSER_CAMERA_TEMPLATE = '''
                 }
             };
             cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            video.srcObject = cameraStream;
-            await video.play();
+            clearTimeout(cameraTimeout);
+            if (cameraTimedOut) {
+                // Timeout already fired but camera came through — restore the video area
+                area.innerHTML = '';
+                const videoEl = document.createElement('video');
+                videoEl.id = 'camera-video';
+                videoEl.setAttribute('autoplay', '');
+                videoEl.setAttribute('playsinline', '');
+                videoEl.style.width = '100%';
+                videoEl.style.display = 'block';
+                area.appendChild(videoEl);
+                // Re-add overlays
+                const statusBar = document.createElement('div');
+                statusBar.className = 'status-bar';
+                statusBar.innerHTML = '<span class="status-text" id="status-text">Ready to scan</span><span class="page-count" id="page-count">0 pages</span>';
+                area.appendChild(statusBar);
+                videoEl.srcObject = cameraStream;
+                await videoEl.play();
+                captureCanvas.width = videoEl.videoWidth;
+                captureCanvas.height = videoEl.videoHeight;
+                detectCanvas.width = Math.round(videoEl.videoWidth * config.detectionScale);
+                detectCanvas.height = Math.round(videoEl.videoHeight * config.detectionScale);
+            } else {
+                video.srcObject = cameraStream;
+                await video.play();
 
-            // Set capture canvas to full video resolution
-            video.addEventListener('loadedmetadata', () => {
-                captureCanvas.width = video.videoWidth;
-                captureCanvas.height = video.videoHeight;
-                // Detection canvas is scaled down
-                detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
-                detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
-                // Show camera resolution badge
-                showImageSize();
-                // Position bounding box if a preset is active
-                updateBoundingBox();
-            });
+                // Set capture canvas to full video resolution
+                video.addEventListener('loadedmetadata', () => {
+                    captureCanvas.width = video.videoWidth;
+                    captureCanvas.height = video.videoHeight;
+                    // Detection canvas is scaled down
+                    detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
+                    detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
+                    // Show camera resolution badge
+                    showImageSize();
+                    // Position bounding box if a preset is active
+                    updateBoundingBox();
+                });
+            }
 
             statusText.textContent = 'Ready to scan';
             document.getElementById('main-button').disabled = false;
         } catch (err) {
+            clearTimeout(cameraTimeout);
+            if (cameraTimedOut) return; // Already showing timeout message
             let msg = '';
             if (err.name === 'NotAllowedError') {
                 msg = '<h2>Camera Access Denied</h2>' +
                     '<p>Please allow camera access in your browser settings.</p>' +
-                    '<p style="font-size:13px;color:var(--ink-muted)">On iOS: Settings → Safari → Camera → Allow</p>' +
-                    '<p style="font-size:13px;color:var(--ink-muted)">On Chrome: tap the lock icon in the address bar → Camera → Allow</p>';
+                    '<p style="font-size:13px;color:var(--ink-muted)"><strong>Mac:</strong> System Settings → Privacy &amp; Security → Camera → enable your browser</p>' +
+                    '<p style="font-size:13px;color:var(--ink-muted)"><strong>iOS:</strong> Settings → Safari → Camera → Allow</p>' +
+                    '<p style="font-size:13px;color:var(--ink-muted)"><strong>Chrome:</strong> Click the lock icon in the address bar → Camera → Allow</p>';
             } else if (err.name === 'NotFoundError') {
                 msg = '<h2>No Camera Found</h2>' +
                     '<p>No camera detected on this device.</p>';
@@ -2003,6 +2045,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                     '<p>' + err.message + '</p>';
             }
             msg += '<p style="font-size:11px;color:#999;margin-top:12px">' + err.name + ': ' + err.message + '</p>';
+            msg += '<p style="margin-top:16px"><a href="/upload" style="color:var(--accent)">Upload a PDF instead →</a></p>';
             area.innerHTML = '<div class="camera-error">' + msg + '</div>';
         }
     }
