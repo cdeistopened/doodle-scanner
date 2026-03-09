@@ -676,9 +676,9 @@ def process_pdf(
     # Build prompt with user preferences
     prompt = build_ocr_prompt(analysis, preferences)
 
-    # Apply page range if specified (1-indexed from user, convert to 0-indexed)
-    range_start = (page_start - 1) if page_start and page_start >= 1 else 0
-    range_end = min(page_end, total_pages) if page_end and page_end >= 1 else total_pages
+    # Apply page range if specified (already 0-indexed from frontend)
+    range_start = page_start if page_start is not None and page_start >= 0 else 0
+    range_end = min(page_end, total_pages) if page_end is not None and page_end >= 1 else total_pages
     range_end = max(range_end, range_start)  # Sanity check
     effective_pages = range_end - range_start
 

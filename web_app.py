@@ -21,7 +21,7 @@ from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Tuple
-from flask import Flask, render_template_string, Response, jsonify, request, send_file, url_for
+from flask import Flask, render_template_string, Response, jsonify, request, send_file, url_for, redirect
 from werkzeug.utils import secure_filename
 
 # OpenCV is optional - only needed for camera capture (local use)
@@ -692,451 +692,228 @@ def _get_library_items() -> list:
 # HTML Templates
 # ============================================================================
 
-LANDING_PAGE = '''
+LANDING_PAGE = None  # Replaced by unified page — "/" now redirects to "/upload"
+
+
+UNIFIED_PAGE = '''
 <!DOCTYPE html>
 <html>
 <head>
     <title>Doodle Scanner</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --ink: #1a1a1a;
-            --ink-soft: #3d3d3d;
-            --ink-muted: #6b6b6b;
-            --cream: #faf8f5;
-            --cream-warm: #f5f2ed;
-            --surface: #ffffff;
-            --border: #d4d0c8;
-            --accent: #4f46e5;
-            --accent-muted: #6366f1;
-            --accent-soft: #e0e7ff;
-            --success: #16a34a;
-            --error: #dc2626;
+            --text-primary: #1c1c1d;
+            --text-secondary: #464649;
+            --text-tertiary: #78787c;
+            --text-interactive: #434fcf;
+            --page-bg: #fafafb;
+            --container-bg: #ffffff;
+            --container-highlight: #f2f2f3;
+            --container-interactive: #eef2ff;
+            --divider-subtle: #e4e4e5;
+            --divider-faint: #f2f2f3;
+            --accent: #434fcf;
+            --accent-soft: #eef2ff;
+            --accent-hover: #5b67e8;
+            --success: #268f4f;
+            --success-bg: #e8f6ec;
+            --error: #e20314;
+            --error-bg: #ffedeb;
+            --warning: #f3c305;
+            --warning-bg: #fcf2d4;
+            --radius-m: 8px;
+            --radius-l: 12px;
+            --radius-xl: 16px;
+            --radius-pill: 1000px;
+            --shadow-1: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px -1px rgba(0,0,0,0.06);
+            --shadow-2: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.06);
+            --shadow-4: 0 20px 25px -5px rgba(0,0,0,0.08), 0 8px 10px -6px rgba(0,0,0,0.06);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--cream);
-            color: var(--ink);
+            font-feature-settings: "ss01", "cv01", "cv11";
+            background: var(--page-bg);
+            color: var(--text-primary);
             min-height: 100vh;
+            letter-spacing: -0.23px;
+        }
+
+        /* === Header === */
+        .top-bar {
+            padding: 12px 24px;
+            border-bottom: 1px solid var(--divider-subtle);
+            background: var(--container-bg);
             display: flex;
-            flex-direction: column;
             align-items: center;
-            padding: 60px 24px;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
-        .logo {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 42px;
-            font-weight: 600;
-            color: var(--ink);
-            margin-bottom: 8px;
+        .top-bar-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
         }
-        .tagline {
+        .brand {
             font-size: 16px;
-            color: var(--ink-muted);
-            margin-bottom: 48px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
         }
-        .routes {
+        .brand-sub {
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+        .top-bar-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .nav-link {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: var(--radius-m);
+            transition: all 0.12s;
+        }
+        .nav-link:hover {
+            background: var(--container-highlight);
+            color: var(--text-primary);
+        }
+
+        /* === Layout: two columns === */
+        .layout {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 24px;
-            max-width: 800px;
+            grid-template-columns: 1fr 340px;
+            gap: 0;
+            min-height: calc(100vh - 49px);
+        }
+        @media (max-width: 900px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+            .sidebar { display: none; }
+        }
+
+        /* === Main panel (left) === */
+        .main-panel {
+            padding: 32px 48px;
+            max-width: 768px;
+            margin: 0 auto;
             width: 100%;
         }
-        .route-card {
-            background: var(--surface);
-            border: 2px solid var(--ink);
-            border-radius: 12px;
-            padding: 32px;
-            text-decoration: none;
-            color: var(--ink);
-            transition: all 0.15s;
-            box-shadow: 4px 4px 0 var(--ink);
-        }
-        .route-card:hover {
-            transform: translate(-4px, -4px);
-            box-shadow: 8px 8px 0 var(--ink);
-        }
-        .route-card:active {
-            transform: translate(2px, 2px);
-            box-shadow: 2px 2px 0 var(--ink);
-        }
-        .route-icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-        }
-        .route-title {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 24px;
+        .page-title {
+            font-size: 22px;
             font-weight: 600;
-            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+            margin-bottom: 4px;
         }
-        .route-desc {
+        .page-subtitle {
             font-size: 14px;
-            color: var(--ink-soft);
-            line-height: 1.5;
+            color: var(--text-tertiary);
+            margin-bottom: 24px;
         }
-        .route-badge {
-            display: inline-block;
-            padding: 4px 10px;
-            background: var(--accent-soft);
-            color: var(--accent);
-            font-size: 12px;
-            font-weight: 600;
-            border-radius: 4px;
-            margin-top: 16px;
-        }
-        .footer {
-            margin-top: 48px;
-            font-size: 13px;
-            color: var(--ink-muted);
-        }
-        .footer a {
-            color: var(--accent);
-            text-decoration: none;
-        }
-        .footer a:hover { text-decoration: underline; }
-    </style>
-</head>
-<body>
-    <div class="logo">Doodle Scanner</div>
-    <div class="tagline">Convert books and documents to clean Markdown</div>
 
-    <div class="routes">
-        <a href="/upload" class="route-card">
-            <div class="route-icon">📄</div>
-            <div class="route-title">Upload PDF</div>
-            <div class="route-desc">
-                Already have a scanned PDF? Upload it and we'll extract clean, readable text with intelligent chunking and language detection.
-            </div>
-            <span class="route-badge">Doodle OCR</span>
-        </a>
-
-        <a href="/camera" class="route-card">
-            <div class="route-icon">📷</div>
-            <div class="route-title">Scan with Camera</div>
-            <div class="route-desc">
-                Point your camera at a book and flip pages. We'll automatically detect page turns and capture each page for OCR processing.
-            </div>
-            <span class="route-badge">Doodle Scanner</span>
-        </a>
-    </div>
-
-    <div style="margin-top: 32px;">
-        <a href="/library" style="color: var(--accent); font-size: 15px; text-decoration: none; font-weight: 500;">
-            View Library &rarr;
-        </a>
-    </div>
-
-    <div class="footer">
-        Part of <a href="http://localhost:3001">Doodle Reader</a>
-    </div>
-</body>
-</html>
-'''
-
-
-UPLOAD_PAGE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Upload PDF — Doodle OCR</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --ink: #1a1a1a;
-            --ink-soft: #444;
-            --ink-muted: #7a7a7a;
-            --bg: #f7f7f8;
-            --cream: #f7f7f8;
-            --cream-warm: #f0eff2;
-            --surface: #ffffff;
-            --border: #e5e5e7;
-            --accent: #6c4bf4;
-            --accent-soft: #ede8ff;
-            --success: #16a34a;
-            --error: #dc2626;
-            --warning: #d97706;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--bg);
-            color: var(--ink);
-            min-height: 100vh;
-            padding: 32px 24px;
-        }
-        .container { max-width: 720px; margin: 0 auto; }
-        .back-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 13px;
-            color: var(--ink-muted);
-            text-decoration: none;
-            margin-bottom: 28px;
-            font-weight: 500;
-        }
-        .back-link:hover { color: var(--ink); }
-        .header {
-            margin-bottom: 28px;
-        }
-        .header h1 {
-            font-family: 'Inter', sans-serif;
-            font-size: 24px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-        .header .subtitle {
-            font-size: 14px;
-            color: var(--ink-muted);
-            margin-top: 4px;
-        }
+        /* Upload zone */
         .upload-zone {
-            border: 2px dashed var(--border);
-            border-radius: 16px;
-            padding: 48px;
+            border: 2px dashed var(--divider-subtle);
+            border-radius: var(--radius-xl);
+            padding: 40px;
             text-align: center;
             margin-bottom: 24px;
-            transition: all 0.2s;
+            transition: all 0.15s;
             cursor: pointer;
-            background: var(--surface);
+            background: var(--container-bg);
         }
         .upload-zone:hover, .upload-zone.dragover {
             border-color: var(--accent);
             background: var(--accent-soft);
         }
         .upload-zone.uploading {
-            border-color: var(--ink-muted);
+            border-color: var(--text-tertiary);
             opacity: 0.7;
             pointer-events: none;
         }
-        .upload-icon { font-size: 36px; margin-bottom: 12px; }
-        .upload-text {
-            font-size: 15px;
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
-        .upload-hint {
-            font-size: 12px;
-            color: var(--ink-muted);
-        }
+        .upload-icon { font-size: 32px; margin-bottom: 10px; }
+        .upload-text { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+        .upload-hint { font-size: 12px; color: var(--text-tertiary); }
         #file-input { display: none; }
 
+        /* Jobs section */
         .jobs-section {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            background: var(--container-bg);
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-xl);
+            padding: 20px;
+            box-shadow: var(--shadow-1);
         }
         .jobs-section h2 {
-            font-size: 15px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            letter-spacing: -0.01em;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-secondary);
         }
         .job-list { list-style: none; }
         .job-item {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            padding: 14px 0;
-            border-bottom: 1px solid var(--border);
+            padding: 12px 0;
+            border-bottom: 1px solid var(--divider-faint);
         }
         .job-item:last-child { border-bottom: none; }
-        .job-name {
-            font-weight: 600;
-            font-size: 14px;
-            margin-bottom: 3px;
-        }
-        .job-meta {
-            font-size: 12px;
-            color: var(--ink-muted);
-        }
+        .job-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+        .job-meta { font-size: 11px; color: var(--text-tertiary); }
         .job-status {
             padding: 3px 10px;
-            border-radius: 20px;
+            border-radius: var(--radius-pill);
             font-size: 11px;
             font-weight: 600;
             white-space: nowrap;
         }
-        .status-pending { background: var(--cream-warm); color: var(--ink-muted); }
-        .status-analyzing { background: #fef3c7; color: #b45309; }
-        .status-analyzed { background: #dbeafe; color: #2563eb; }
+        .status-pending { background: var(--container-highlight); color: var(--text-tertiary); }
+        .status-analyzing { background: var(--warning-bg); color: #745c00; }
+        .status-analyzed { background: var(--accent-soft); color: var(--accent); }
         .status-processing { background: var(--accent-soft); color: var(--accent); }
-        .status-complete { background: #dcfce7; color: var(--success); }
-        .status-error { background: #fee2e2; color: var(--error); }
-        .job-actions { display: flex; gap: 8px; margin-top: 8px; }
-        .chunk-links { margin-top: 6px; font-size: 11px; }
+        .status-complete { background: var(--success-bg); color: var(--success); }
+        .status-error { background: var(--error-bg); color: var(--error); }
+        .job-actions { display: flex; gap: 6px; margin-top: 6px; }
+        .chunk-links { margin-top: 4px; font-size: 11px; }
         .chunk-links a {
             color: var(--accent);
             text-decoration: none;
             margin-right: 6px;
         }
         .chunk-links a:hover { text-decoration: underline; }
-
-        /* Analysis Modal */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
-        }
-        .modal-overlay.active { display: flex; }
-        .modal {
-            background: var(--surface);
-            border-radius: 20px;
-            padding: 28px;
-            max-width: 520px;
-            width: 92%;
-            max-height: 85vh;
-            overflow-y: auto;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
-        }
-        .modal h2 {
-            font-size: 18px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            letter-spacing: -0.01em;
-        }
-        .settings-toggle {
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--ink-soft);
-            cursor: pointer;
-            padding: 10px 0 6px;
-            list-style: none;
-            user-select: none;
-        }
-        .settings-toggle::-webkit-details-marker { display: none; }
-        .settings-toggle::before {
-            content: '▸ ';
-            font-size: 11px;
-            color: var(--ink-muted);
-        }
-        details[open] > .settings-toggle::before { content: '▾ '; }
-        .page-range-section {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px 0;
-            font-size: 13px;
-        }
-        .page-range-section input[type="number"] {
-            width: 64px;
-            padding: 6px 8px;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            font-size: 13px;
-            text-align: center;
-        }
-        .page-range-section label {
-            color: var(--ink-muted);
-            font-size: 12px;
-        }
-        .analysis-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border);
-        }
-        .analysis-label { color: var(--ink-muted); font-size: 14px; }
-        .analysis-value { font-weight: 500; }
-        .cost-box {
-            background: var(--accent-soft);
-            border-radius: 8px;
-            padding: 16px;
-            margin: 16px 0;
-            text-align: center;
-        }
-        .cost-amount {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--accent);
-        }
-        .cost-label { font-size: 13px; color: var(--ink-muted); }
-        .modal-actions {
-            display: flex;
-            gap: 12px;
-            margin-top: 24px;
-        }
-        .modal-btn {
-            flex: 1;
-            padding: 11px 20px;
-            border-radius: 12px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            border: 1px solid var(--border);
-            background: var(--surface);
-            transition: all 0.15s;
-        }
-        .modal-btn.primary {
-            background: var(--accent);
-            border-color: var(--accent);
-            color: white;
-        }
-        .modal-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        .preferences-section {
-            border-top: 1px solid var(--border);
-            padding-top: 16px;
-            margin-top: 16px;
-        }
-        .preference-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 0;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        .preference-item input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--accent);
-        }
-        .preference-item .pref-detail {
-            font-size: 12px;
-            color: var(--ink-muted);
-            font-style: italic;
-        }
         .job-btn {
-            padding: 5px 12px;
+            padding: 4px 10px;
             font-size: 11px;
             font-weight: 600;
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-m);
             cursor: pointer;
-            background: var(--surface);
-            color: var(--ink);
+            background: var(--container-bg);
+            color: var(--text-primary);
             text-decoration: none;
-            transition: all 0.15s;
+            transition: all 0.12s;
         }
-        .job-btn:hover { background: var(--cream-warm); }
+        .job-btn:hover { background: var(--container-highlight); }
         .job-btn.primary {
             background: var(--accent);
             color: white;
             border-color: var(--accent);
         }
-        .job-progress {
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--ink-muted);
-        }
-        .empty-state {
-            text-align: center;
-            padding: 32px;
-            color: var(--ink-muted);
-        }
-        /* Whimsical thinking animation */
+        .job-btn.primary:hover { background: var(--accent-hover); }
+        .job-progress { margin-top: 6px; font-size: 11px; color: var(--text-tertiary); }
+        .empty-state { text-align: center; padding: 24px; color: var(--text-tertiary); font-size: 13px; }
+
+        /* Thinking animation */
         @keyframes shimmer {
             0%, 100% { opacity: 0.4; }
             50% { opacity: 1; }
@@ -1144,12 +921,12 @@ UPLOAD_PAGE = '''
         .thinking-dots {
             display: inline-flex;
             gap: 3px;
-            margin-left: 6px;
+            margin-left: 4px;
         }
         .thinking-dots span {
             display: inline-block;
-            width: 5px;
-            height: 5px;
+            width: 4px;
+            height: 4px;
             border-radius: 50%;
             background: var(--accent);
             animation: shimmer 1.4s ease-in-out infinite;
@@ -1157,60 +934,278 @@ UPLOAD_PAGE = '''
         .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
         .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
         .thinking-status {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--accent);
             font-style: italic;
-            margin-top: 6px;
+            margin-top: 4px;
+        }
+
+        /* === Modal === */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.50);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--container-bg);
+            border-radius: var(--radius-xl);
+            padding: 24px;
+            max-width: 500px;
+            width: 92%;
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: var(--shadow-4);
+        }
+        .modal h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            letter-spacing: -0.5px;
+        }
+        .settings-toggle {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 8px 0 4px;
+            list-style: none;
+            user-select: none;
+        }
+        .settings-toggle::-webkit-details-marker { display: none; }
+        .settings-toggle::before { content: '\\25B8 '; font-size: 10px; color: var(--text-tertiary); }
+        details[open] > .settings-toggle::before { content: '\\25BE '; }
+        .page-range-section {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 0;
+            font-size: 13px;
+        }
+        .page-range-section input[type="number"] {
+            width: 60px;
+            padding: 5px 6px;
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-m);
+            font-size: 13px;
+            text-align: center;
+        }
+        .page-range-section label { color: var(--text-tertiary); font-size: 12px; }
+        .analysis-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--divider-faint);
+            font-size: 13px;
+        }
+        .analysis-label { color: var(--text-tertiary); }
+        .analysis-value { font-weight: 500; }
+        .cost-box {
+            background: var(--accent-soft);
+            border-radius: var(--radius-m);
+            padding: 14px;
+            margin: 14px 0;
+            text-align: center;
+        }
+        .cost-amount { font-size: 24px; font-weight: 700; color: var(--accent); }
+        .cost-label { font-size: 12px; color: var(--text-tertiary); }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .modal-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border-radius: var(--radius-l);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid var(--divider-subtle);
+            background: var(--container-bg);
+            transition: all 0.12s;
+        }
+        .modal-btn.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+        .modal-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
+        .preference-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 0;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .preference-item input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+        }
+        .preference-item .pref-detail {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            font-style: italic;
         }
         .cost-estimate-live {
             font-size: 12px;
-            color: var(--ink-muted);
+            color: var(--text-tertiary);
             margin-top: 8px;
-            padding: 8px 12px;
-            background: var(--cream-warm);
-            border-radius: 6px;
+            padding: 6px 10px;
+            background: var(--container-highlight);
+            border-radius: var(--radius-m);
         }
         .cost-estimate-live .cost-value {
             font-weight: 600;
-            color: var(--ink-soft);
+            color: var(--text-secondary);
+        }
+
+        /* === Sidebar (library) === */
+        .sidebar {
+            border-left: 1px solid var(--divider-subtle);
+            background: var(--container-bg);
+            overflow-y: auto;
+            max-height: calc(100vh - 49px);
+            position: sticky;
+            top: 49px;
+        }
+        .sidebar-header {
+            padding: 16px 16px 12px;
+            border-bottom: 1px solid var(--divider-faint);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sidebar-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .sidebar-stats {
+            display: flex;
+            gap: 12px;
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+        .sidebar-stats strong {
+            color: var(--text-primary);
+            font-size: 14px;
+            display: block;
+        }
+        .lib-item {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--divider-faint);
+            font-size: 12px;
+            transition: background 0.1s;
+            cursor: default;
+        }
+        .lib-item:hover { background: var(--container-highlight); }
+        .lib-item-title {
+            font-weight: 600;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 2px;
+        }
+        .lib-item-meta {
+            color: var(--text-tertiary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .lib-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: var(--radius-pill);
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .lib-badge.scan { background: var(--accent-soft); color: var(--accent); }
+        .lib-badge.upload { background: var(--warning-bg); color: #745c00; }
+        .lib-dot {
+            display: inline-block;
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .lib-dot.complete { background: var(--success); }
+        .lib-dot.pending { background: var(--divider-subtle); }
+        .lib-dot.processing { background: var(--warning); }
+        .lib-dot.error { background: var(--error); }
+        .lib-actions a {
+            font-size: 11px;
+            color: var(--accent);
+            text-decoration: none;
+            margin-right: 8px;
+        }
+        .lib-actions a:hover { text-decoration: underline; }
+        .lib-empty {
+            padding: 32px 16px;
+            text-align: center;
+            color: var(--text-tertiary);
+            font-size: 13px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <a href="/" class="back-link">← Back to Doodle Scanner</a>
+    <!-- Top bar -->
+    <div class="top-bar">
+        <div class="top-bar-left">
+            <span class="brand">Doodle Scanner</span>
+            <span class="brand-sub">PDF to Markdown</span>
+        </div>
+        <div class="top-bar-right">
+            <a href="/camera" class="nav-link">Camera</a>
+        </div>
+    </div>
 
-        <div class="header">
-            <h1>Upload PDF</h1>
-            <div class="subtitle">Upload a scanned PDF to extract clean Markdown text</div>
+    <div class="layout">
+        <!-- Main panel -->
+        <div class="main-panel">
+            <div class="page-title">Upload PDF</div>
+            <div class="page-subtitle">Drop a scanned book or document for OCR extraction</div>
+
+            <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+                <div class="upload-icon">+</div>
+                <div class="upload-text">Drop PDF here or click to browse</div>
+                <div class="upload-hint">Max 100MB</div>
+                <input type="file" id="file-input" accept=".pdf" onchange="handleFile(this.files[0])">
+            </div>
+
+            <div class="jobs-section">
+                <h2>Jobs</h2>
+                <ul class="job-list" id="job-list">
+                    <li class="empty-state">Upload a PDF to get started.</li>
+                </ul>
+            </div>
         </div>
 
-        <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
-            <div class="upload-icon">📄</div>
-            <div class="upload-text">Drop PDF here or click to browse</div>
-            <div class="upload-hint">Max 100MB • Scanned books and documents work best</div>
-            <input type="file" id="file-input" accept=".pdf" onchange="handleFile(this.files[0])">
-        </div>
-
-        <div class="jobs-section">
-            <h2>Recent Jobs</h2>
-            <ul class="job-list" id="job-list">
-                <li class="empty-state">No jobs yet. Upload a PDF to get started.</li>
-            </ul>
+        <!-- Sidebar: Library -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>Library</h2>
+                <div class="sidebar-stats" id="lib-stats"></div>
+            </div>
+            <div id="lib-body">
+                <div class="lib-empty">Loading...</div>
+            </div>
         </div>
     </div>
 
     <!-- Analysis Confirmation Modal -->
     <div class="modal-overlay" id="analysis-modal">
         <div class="modal">
-            <h2>📊 Document Analysis</h2>
+            <h2>Document Analysis</h2>
             <div id="analysis-content"></div>
 
             <!-- Page Range -->
             <div class="page-range-section">
                 <span style="font-weight:600">Pages:</span>
                 <input type="number" id="page-start" min="1" value="1">
-                <span style="color:var(--ink-muted)">to</span>
+                <span style="color:var(--text-tertiary)">to</span>
                 <input type="number" id="page-end" min="1" value="1">
                 <label>(of <span id="page-total">?</span>)</label>
             </div>
@@ -1218,61 +1213,56 @@ UPLOAD_PAGE = '''
             <!-- Settings in collapsible -->
             <details>
                 <summary class="settings-toggle">Settings</summary>
-                <div style="padding: 8px 0 4px;">
+                <div style="padding: 6px 0 4px;">
                     <label class="preference-item">
                         <input type="checkbox" id="pref-strip-headers" checked>
                         <span>Strip running headers</span>
                         <span class="pref-detail" id="header-detail"></span>
                     </label>
-
                     <label class="preference-item">
                         <input type="checkbox" id="pref-strip-footers" checked>
                         <span>Strip running footers</span>
                         <span class="pref-detail" id="footer-detail"></span>
                     </label>
-
                     <label class="preference-item">
                         <input type="checkbox" id="pref-page-breaks">
                         <span>Include page breaks (---)</span>
                     </label>
-
                     <label class="preference-item">
                         <input type="checkbox" id="pref-page-numbers">
                         <span>Include page numbers</span>
                     </label>
-
                     <label class="preference-item">
                         <input type="checkbox" id="pref-smooth-boundaries" checked>
                         <span>AI boundary smoothing</span>
                         <span class="pref-detail">(fixes broken sentences)</span>
                     </label>
                 </div>
-
-                <div style="border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px;">
-                    <h3 style="font-size: 14px; font-weight: 600; margin: 0 0 12px; color: var(--ink-soft);">OCR Model</h3>
-                    <div style="display:flex; flex-direction:column; gap:6px; font-size:13px">
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                <div style="border-top: 1px solid var(--divider-faint); margin-top: 8px; padding-top: 10px;">
+                    <h3 style="font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text-secondary);">OCR Model</h3>
+                    <div style="display:flex; flex-direction:column; gap:4px; font-size:12px">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
                             <input type="radio" name="ocr-model" value="gemini-3-flash-preview" checked onchange="updateCostEstimate()">
-                            <span>Gemini 3 Flash <span style="color:var(--ink-muted)">— best accuracy, $0.50/M input</span></span>
+                            <span>Gemini 3 Flash <span style="color:var(--text-tertiary)">$0.50/M</span></span>
                         </label>
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
                             <input type="radio" name="ocr-model" value="gemini-2.0-flash" onchange="updateCostEstimate()">
-                            <span>Gemini 2.0 Flash <span style="color:var(--ink-muted)">— budget pick, $0.10/M input (5x cheaper)</span></span>
+                            <span>Gemini 2.0 Flash <span style="color:var(--text-tertiary)">$0.10/M</span></span>
                         </label>
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
                             <input type="radio" name="ocr-model" value="gemini-2.5-flash-lite" onchange="updateCostEstimate()">
-                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">— balanced, $0.30/M input</span></span>
+                            <span>Gemini 2.5 Flash Lite <span style="color:var(--text-tertiary)">$0.30/M</span></span>
                         </label>
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
                             <input type="radio" name="ocr-model" value="gemini-3.1-pro-preview" onchange="updateCostEstimate()">
-                            <span>Gemini 3.1 Pro <span style="color:var(--ink-muted)">— highest quality, $2.50/M input (5x more)</span></span>
+                            <span>Gemini 3.1 Pro <span style="color:var(--text-tertiary)">$2.50/M</span></span>
                         </label>
                     </div>
                     <div class="cost-estimate-live" id="model-cost-estimate" style="display:none">
-                        Estimated cost with this model: <span class="cost-value" id="model-cost-value">—</span>
+                        Est: <span class="cost-value" id="model-cost-value"></span>
                     </div>
                 </div>
-            </div>
+            </details>
 
             <div class="modal-actions">
                 <button class="modal-btn" onclick="closeModal()">Cancel</button>
@@ -1286,364 +1276,252 @@ UPLOAD_PAGE = '''
         const uploadZone = document.getElementById('upload-zone');
 
         // Drag and drop
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadZone.classList.add('dragover');
-        });
-        uploadZone.addEventListener('dragleave', () => {
-            uploadZone.classList.remove('dragover');
-        });
+        uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+        uploadZone.addEventListener('dragleave', () => { uploadZone.classList.remove('dragover'); });
         uploadZone.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadZone.classList.remove('dragover');
             const file = e.dataTransfer.files[0];
-            if (file && file.type === 'application/pdf') {
-                handleFile(file);
-            }
+            if (file && file.type === 'application/pdf') handleFile(file);
         });
 
         function handleFile(file) {
-            if (!file || file.type !== 'application/pdf') {
-                alert('Please select a PDF file');
-                return;
-            }
-
+            if (!file || file.type !== 'application/pdf') { alert('Please select a PDF file'); return; }
             uploadZone.classList.add('uploading');
             uploadZone.querySelector('.upload-text').innerHTML = 'Uploading<span class="thinking-dots"><span></span><span></span><span></span></span>';
-
             const formData = new FormData();
             formData.append('file', file);
-
-            fetch('/api/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(r => r.json())
-            .then(data => {
-                uploadZone.classList.remove('uploading');
-                uploadZone.querySelector('.upload-text').textContent = 'Drop PDF here or click to browse';
-
-                if (data.error) {
-                    alert('Upload failed: ' + data.error);
-                } else {
-                    // Start analysis instead of processing
-                    pendingJobId = data.job_id;
-                    fetch('/api/jobs/' + data.job_id + '/analyze', { method: 'POST' });
-                    refreshJobs();
-                    // Poll for analysis completion
-                    pollForAnalysis(data.job_id);
-                }
-            })
-            .catch(err => {
-                uploadZone.classList.remove('uploading');
-                uploadZone.querySelector('.upload-text').textContent = 'Drop PDF here or click to browse';
-                alert('Upload failed: ' + err);
-            });
-        }
-
-        function refreshJobs() {
-            fetch('/api/jobs')
+            fetch('/api/upload', { method: 'POST', body: formData })
                 .then(r => r.json())
                 .then(data => {
-                    const list = document.getElementById('job-list');
-                    if (data.jobs.length === 0) {
-                        list.innerHTML = '<li class="empty-state">No jobs yet. Upload a PDF to get started.</li>';
-                        return;
+                    uploadZone.classList.remove('uploading');
+                    uploadZone.querySelector('.upload-text').textContent = 'Drop PDF here or click to browse';
+                    if (data.error) { alert('Upload failed: ' + data.error); }
+                    else {
+                        pendingJobId = data.job_id;
+                        fetch('/api/jobs/' + data.job_id + '/analyze', { method: 'POST' });
+                        refreshJobs();
+                        pollForAnalysis(data.job_id);
                     }
-
-                    list.innerHTML = data.jobs.map(job => {
-                        const statusClass = 'status-' + job.status;
-                        const statusText = job.status.charAt(0).toUpperCase() + job.status.slice(1);
-
-                        let actions = '';
-                        if (job.status === 'complete' && job.output_path) {
-                            actions = `<a href="/api/jobs/${job.id}/download" class="job-btn primary">Download</a>
-                                       <button onclick="toggleChunks('${job.id}', ${job.chunks_total || 0})" class="job-btn">Chunks</button>`;
-                        } else if (job.status === 'pending') {
-                            actions = `<button onclick="analyzeJob('${job.id}')" class="job-btn primary">Analyze</button>`;
-                        } else if (job.status === 'analyzed') {
-                            actions = `<button onclick="showAnalysisModal(${JSON.stringify(job).replace(/"/g, '&quot;')})" class="job-btn primary">Review & Start</button>`;
-                        } else if (job.status === 'processing' || job.status === 'analyzing') {
-                            actions = `<button onclick="cancelJob('${job.id}')" class="job-btn" style="color: var(--error);">Cancel</button>`;
-                        } else if (job.status === 'error') {
-                            actions = `<button onclick="retryJob('${job.id}')" class="job-btn">Retry</button>`;
-                        }
-
-                        let progress = '';
-                        if (job.status === 'analyzing') {
-                            const verbs = [
-                                'Squinting at your pages',
-                                'Counting footnotes',
-                                'Deciphering margins',
-                                'Inspecting the typography',
-                                'Admiring the layout',
-                                'Checking for secret messages',
-                                'Reading between the lines',
-                                'Consulting the font spirits',
-                            ];
-                            const verb = verbs[Math.floor(Date.now() / 3000) % verbs.length];
-                            progress = `<div class="thinking-status">${verb}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
-                        } else if (job.status === 'processing' && job.current_chunk) {
-                            const pct = job.progress || 0;
-                            const bar = '█'.repeat(Math.floor(pct / 5)) + '░'.repeat(20 - Math.floor(pct / 5));
-                            progress = `<div class="job-progress">${bar} ${pct}%<br><span style="color:var(--accent);font-style:italic">${job.current_chunk}</span></div>`;
-                        } else if (job.status === 'processing') {
-                            const verbs2 = [
-                                'Warming up the vision engines',
-                                'Teaching Gemini to read',
-                                'Converting pixels to prose',
-                                'Extracting the good stuff',
-                            ];
-                            const verb2 = verbs2[Math.floor(Date.now() / 3000) % verbs2.length];
-                            progress = `<div class="thinking-status">${verb2}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
-                        } else if (job.status === 'complete' && job.chunks_failed > 0) {
-                            progress = `<div class="job-progress" style="color: var(--warning);">⚠ ${job.chunks_failed}/${job.chunks_total} chunks failed</div>`;
-                        } else if (job.status === 'error' && job.error) {
-                            progress = `<div class="job-progress" style="color: var(--error);">Error: ${job.error.substring(0, 100)}</div>`;
-                        }
-
-                        let meta = `${job.page_count} pages`;
-                        if (job.analysis && job.analysis.estimated_cost_usd) {
-                            meta += ` • Est. $${job.analysis.estimated_cost_usd.toFixed(3)}`;
-                        }
-                        if (job.analysis && job.analysis.language) {
-                            meta += ` • ${job.analysis.language.charAt(0).toUpperCase() + job.analysis.language.slice(1)}`;
-                        }
-
-                        return `
-                            <li class="job-item">
-                                <div style="flex:1">
-                                    <div class="job-name">${job.filename}</div>
-                                    <div class="job-meta">${meta}</div>
-                                    ${progress}
-                                    <div class="job-actions">${actions}</div>
-                                    <div class="chunk-links" id="chunks-${job.id}" style="display:none"></div>
-                                </div>
-                                <span class="job-status ${statusClass}">${statusText}</span>
-                            </li>
-                        `;
-                    }).join('');
+                })
+                .catch(err => {
+                    uploadZone.classList.remove('uploading');
+                    uploadZone.querySelector('.upload-text').textContent = 'Drop PDF here or click to browse';
+                    alert('Upload failed: ' + err);
                 });
         }
 
-        function startJob(jobId) {
-            fetch('/api/jobs/' + jobId + '/start', { method: 'POST' })
-                .then(() => refreshJobs());
+        function refreshJobs() {
+            fetch('/api/jobs').then(r => r.json()).then(data => {
+                const list = document.getElementById('job-list');
+                if (data.jobs.length === 0) {
+                    list.innerHTML = '<li class="empty-state">Upload a PDF to get started.</li>';
+                    return;
+                }
+                list.innerHTML = data.jobs.map(job => {
+                    const statusClass = 'status-' + job.status;
+                    const statusText = job.status.charAt(0).toUpperCase() + job.status.slice(1);
+                    let actions = '';
+                    if (job.status === 'complete' && job.output_path) {
+                        actions = `<a href="/api/jobs/${job.id}/download" class="job-btn primary">Download</a>
+                                   <button onclick="toggleChunks('${job.id}', ${job.chunks_total || 0})" class="job-btn">Chunks</button>`;
+                    } else if (job.status === 'pending') {
+                        actions = `<button onclick="analyzeJob('${job.id}')" class="job-btn primary">Analyze</button>`;
+                    } else if (job.status === 'analyzed') {
+                        actions = `<button onclick="showAnalysisModal(${JSON.stringify(job).replace(/"/g, '&quot;')})" class="job-btn primary">Review & Start</button>`;
+                    } else if (job.status === 'processing' || job.status === 'analyzing') {
+                        actions = `<button onclick="cancelJob('${job.id}')" class="job-btn" style="color: var(--error);">Cancel</button>`;
+                    } else if (job.status === 'error') {
+                        actions = `<button onclick="retryJob('${job.id}')" class="job-btn">Retry</button>`;
+                    }
+
+                    let progress = '';
+                    if (job.status === 'analyzing') {
+                        const verbs = ['Squinting at your pages','Counting footnotes','Deciphering margins','Inspecting the typography','Admiring the layout','Reading between the lines','Consulting the font spirits'];
+                        const verb = verbs[Math.floor(Date.now() / 3000) % verbs.length];
+                        progress = `<div class="thinking-status">${verb}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
+                    } else if (job.status === 'processing' && job.current_chunk) {
+                        const pct = job.progress || 0;
+                        const filled = Math.floor(pct / 5);
+                        const bar = String.fromCodePoint(0x2588).repeat(filled) + String.fromCodePoint(0x2591).repeat(20 - filled);
+                        progress = `<div class="job-progress">${bar} ${pct}%<br><span style="color:var(--accent);font-style:italic">${job.current_chunk}</span></div>`;
+                    } else if (job.status === 'processing') {
+                        const verbs2 = ['Warming up the vision engines','Teaching Gemini to read','Converting pixels to prose','Extracting the good stuff'];
+                        const verb2 = verbs2[Math.floor(Date.now() / 3000) % verbs2.length];
+                        progress = `<div class="thinking-status">${verb2}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
+                    } else if (job.status === 'complete' && job.chunks_failed > 0) {
+                        progress = `<div class="job-progress" style="color: #745c00;">&#9888; ${job.chunks_failed}/${job.chunks_total} chunks failed</div>`;
+                    } else if (job.status === 'error' && job.error) {
+                        progress = `<div class="job-progress" style="color: var(--error);">Error: ${job.error.substring(0, 100)}</div>`;
+                    }
+
+                    let meta = `${job.page_count} pages`;
+                    if (job.analysis && job.analysis.estimated_cost_usd) meta += ` &#183; Est. $${job.analysis.estimated_cost_usd.toFixed(3)}`;
+                    if (job.analysis && job.analysis.language) meta += ` &#183; ${job.analysis.language.charAt(0).toUpperCase() + job.analysis.language.slice(1)}`;
+
+                    return `<li class="job-item">
+                        <div style="flex:1">
+                            <div class="job-name">${job.filename}</div>
+                            <div class="job-meta">${meta}</div>
+                            ${progress}
+                            <div class="job-actions">${actions}</div>
+                            <div class="chunk-links" id="chunks-${job.id}" style="display:none"></div>
+                        </div>
+                        <span class="job-status ${statusClass}">${statusText}</span>
+                    </li>`;
+                }).join('');
+            });
         }
 
-        function cancelJob(jobId) {
-            if (confirm('Cancel this job?')) {
-                fetch('/api/jobs/' + jobId + '/cancel', { method: 'POST' })
-                    .then(() => refreshJobs());
-            }
-        }
-
-        function retryJob(jobId) {
-            fetch('/api/jobs/' + jobId + '/start', { method: 'POST' })
-                .then(() => refreshJobs());
-        }
+        function startJob(jobId) { fetch('/api/jobs/' + jobId + '/start', { method: 'POST' }).then(() => refreshJobs()); }
+        function cancelJob(jobId) { if (confirm('Cancel this job?')) fetch('/api/jobs/' + jobId + '/cancel', { method: 'POST' }).then(() => refreshJobs()); }
+        function retryJob(jobId) { fetch('/api/jobs/' + jobId + '/start', { method: 'POST' }).then(() => refreshJobs()); }
 
         function toggleChunks(jobId, totalChunks) {
             const el = document.getElementById('chunks-' + jobId);
             if (!el) return;
-            if (el.style.display !== 'none') {
-                el.style.display = 'none';
-                return;
-            }
-            if (totalChunks === 0) {
-                el.innerHTML = '<span style="color:var(--ink-muted)">No chunk data</span>';
+            if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+            if (totalChunks === 0) { el.innerHTML = '<span style="color:var(--text-tertiary)">No chunk data</span>'; el.style.display = 'block'; return; }
+            fetch('/api/jobs/' + jobId + '/chunks').then(r => r.json()).then(data => {
+                if (data.chunks && data.chunks.length) {
+                    el.innerHTML = data.chunks.map((c, i) => `<a href="/api/jobs/${jobId}/chunks/${i+1}/download" title="${c.pages}">${c.label}</a>`).join('');
+                } else {
+                    el.innerHTML = '<span style="color:var(--text-tertiary)">Chunks not saved</span>';
+                }
                 el.style.display = 'block';
-                return;
-            }
-            fetch('/api/jobs/' + jobId + '/chunks')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.chunks && data.chunks.length) {
-                        el.innerHTML = data.chunks.map((c, i) =>
-                            `<a href="/api/jobs/${jobId}/chunks/${i+1}/download" title="${c.pages}">${c.label}</a>`
-                        ).join('');
-                    } else {
-                        el.innerHTML = '<span style="color:var(--ink-muted)">Chunks not saved</span>';
-                    }
-                    el.style.display = 'block';
-                });
+            });
         }
 
         function analyzeJob(jobId) {
             pendingJobId = jobId;
-            fetch('/api/jobs/' + jobId + '/analyze', { method: 'POST' })
-                .then(() => {
-                    refreshJobs();
-                    pollForAnalysis(jobId);
-                });
+            fetch('/api/jobs/' + jobId + '/analyze', { method: 'POST' }).then(() => { refreshJobs(); pollForAnalysis(jobId); });
         }
 
         function pollForAnalysis(jobId) {
             const poll = setInterval(() => {
-                fetch('/api/jobs/' + jobId)
-                    .then(r => r.json())
-                    .then(job => {
-                        if (job.status === 'analyzed' && job.analysis) {
-                            clearInterval(poll);
-                            showAnalysisModal(job);
-                        } else if (job.status === 'error') {
-                            clearInterval(poll);
-                            alert('Analysis failed: ' + job.error);
-                        }
-                    });
+                fetch('/api/jobs/' + jobId).then(r => r.json()).then(job => {
+                    if (job.status === 'analyzed' && job.analysis) { clearInterval(poll); showAnalysisModal(job); }
+                    else if (job.status === 'error') { clearInterval(poll); alert('Analysis failed: ' + job.error); }
+                });
             }, 1000);
         }
 
         function showAnalysisModal(job) {
             pendingJobId = job.id;
             const a = job.analysis;
-            const content = document.getElementById('analysis-content');
-
-            content.innerHTML = `
-                <div class="analysis-item">
-                    <span class="analysis-label">Document</span>
-                    <span class="analysis-value">${job.filename}</span>
-                </div>
-                <div class="analysis-item">
-                    <span class="analysis-label">Pages</span>
-                    <span class="analysis-value">${job.page_count}</span>
-                </div>
-                <div class="analysis-item">
-                    <span class="analysis-label">Type</span>
-                    <span class="analysis-value">${a.document_type || 'Unknown'}</span>
-                </div>
-                <div class="analysis-item">
-                    <span class="analysis-label">Language</span>
-                    <span class="analysis-value">${(a.language || 'Unknown').charAt(0).toUpperCase() + (a.language || 'unknown').slice(1)}</span>
-                </div>
-                <div class="analysis-item">
-                    <span class="analysis-label">Two Columns</span>
-                    <span class="analysis-value">${a.has_two_columns ? 'Yes' : 'No'}</span>
-                </div>
-                <div class="analysis-item">
-                    <span class="analysis-label">Footnotes</span>
-                    <span class="analysis-value">${a.has_footnotes ? 'Yes (' + (a.footnote_style || 'numbered') + ')' : 'No'}</span>
-                </div>
-                <div class="analysis-item">
-                    <span class="analysis-label">Est. Processing Time</span>
-                    <span class="analysis-value">~${a.estimated_minutes || '?'} minutes</span>
-                </div>
-
+            document.getElementById('analysis-content').innerHTML = `
+                <div class="analysis-item"><span class="analysis-label">Document</span><span class="analysis-value">${job.filename}</span></div>
+                <div class="analysis-item"><span class="analysis-label">Pages</span><span class="analysis-value">${job.page_count}</span></div>
+                <div class="analysis-item"><span class="analysis-label">Type</span><span class="analysis-value">${a.document_type || 'Unknown'}</span></div>
+                <div class="analysis-item"><span class="analysis-label">Language</span><span class="analysis-value">${(a.language || 'Unknown').charAt(0).toUpperCase() + (a.language || 'unknown').slice(1)}</span></div>
+                <div class="analysis-item"><span class="analysis-label">Two Columns</span><span class="analysis-value">${a.has_two_columns ? 'Yes' : 'No'}</span></div>
+                <div class="analysis-item"><span class="analysis-label">Footnotes</span><span class="analysis-value">${a.has_footnotes ? 'Yes (' + (a.footnote_style || 'numbered') + ')' : 'No'}</span></div>
+                <div class="analysis-item"><span class="analysis-label">Est. Time</span><span class="analysis-value">~${a.estimated_minutes || '?'} min</span></div>
                 <div class="cost-box">
                     <div class="cost-label">Estimated API Cost</div>
                     <div class="cost-amount">$${(a.estimated_cost_usd || 0).toFixed(3)}</div>
-                    <div class="cost-label">Based on ${a.sample_pages_analyzed || '?'} sample pages analyzed</div>
+                    <div class="cost-label">Based on ${a.sample_pages_analyzed || '?'} sample pages</div>
                 </div>
+                ${a.notes ? `<p style="font-size:12px;color:var(--text-tertiary);margin-top:8px"><strong>Notes:</strong> ${a.notes}</p>` : ''}`;
 
-                ${a.notes ? `<p style="font-size: 13px; color: var(--ink-muted); margin-top: 12px;"><strong>Notes:</strong> ${a.notes}</p>` : ''}
-            `;
+            const hd = document.getElementById('header-detail');
+            const fd = document.getElementById('footer-detail');
+            hd.textContent = a.running_header_text ? '"' + a.running_header_text + '"' : a.has_headers_footers ? '(detected)' : '(none detected)';
+            fd.textContent = a.running_footer_text ? '"' + a.running_footer_text + '"' : '(none detected)';
 
-            // Show detected header/footer in preferences
-            const headerDetail = document.getElementById('header-detail');
-            const footerDetail = document.getElementById('footer-detail');
-
-            if (a.running_header_text) {
-                headerDetail.textContent = `"${a.running_header_text}"`;
-            } else if (a.has_headers_footers) {
-                headerDetail.textContent = '(detected)';
-            } else {
-                headerDetail.textContent = '(none detected)';
-            }
-
-            if (a.running_footer_text) {
-                footerDetail.textContent = `"${a.running_footer_text}"`;
-            } else {
-                footerDetail.textContent = '(none detected)';
-            }
-
-            // Set page range inputs
             document.getElementById('page-start').value = 1;
             document.getElementById('page-start').max = job.page_count;
             document.getElementById('page-end').value = job.page_count;
             document.getElementById('page-end').max = job.page_count;
             document.getElementById('page-total').textContent = job.page_count;
 
-            // Store base cost for model-based recalculation
             baseCostUsd = a.estimated_cost_usd || 0;
-
-            // Reset model selection to default and update cost
-            const defaultModel = document.querySelector('input[name="ocr-model"][value="gemini-3-flash-preview"]');
-            if (defaultModel) defaultModel.checked = true;
+            const dm = document.querySelector('input[name="ocr-model"][value="gemini-3-flash-preview"]');
+            if (dm) dm.checked = true;
             updateCostEstimate();
-
             document.getElementById('analysis-modal').classList.add('active');
         }
 
-        function closeModal() {
-            document.getElementById('analysis-modal').classList.remove('active');
-            pendingJobId = null;
-        }
+        function closeModal() { document.getElementById('analysis-modal').classList.remove('active'); pendingJobId = null; }
 
-        // Model cost multipliers relative to gemini-3-flash-preview (1.0x)
-        const MODEL_COST_MULTIPLIERS = {
-            'gemini-2.0-flash': 0.2,
-            'gemini-2.5-flash-lite': 0.6,
-            'gemini-3-flash-preview': 1.0,
-            'gemini-3.1-pro-preview': 5.0,
-        };
+        const MODEL_COST_MULTIPLIERS = { 'gemini-2.0-flash': 0.2, 'gemini-2.5-flash-lite': 0.6, 'gemini-3-flash-preview': 1.0, 'gemini-3.1-pro-preview': 5.0 };
         let baseCostUsd = 0;
 
         function updateCostEstimate() {
-            const selectedModel = document.querySelector('input[name="ocr-model"]:checked');
-            if (!selectedModel || !baseCostUsd) return;
-            const multiplier = MODEL_COST_MULTIPLIERS[selectedModel.value] || 1.0;
-            const adjusted = baseCostUsd * multiplier;
-            const el = document.getElementById('model-cost-estimate');
-            const val = document.getElementById('model-cost-value');
-            el.style.display = 'block';
-            val.textContent = '$' + adjusted.toFixed(3);
-
-            // Also update the cost in the modal
-            const costAmount = document.querySelector('.cost-amount');
-            if (costAmount) {
-                costAmount.textContent = '$' + adjusted.toFixed(3);
-            }
+            const sel = document.querySelector('input[name="ocr-model"]:checked');
+            if (!sel || !baseCostUsd) return;
+            const adj = baseCostUsd * (MODEL_COST_MULTIPLIERS[sel.value] || 1.0);
+            document.getElementById('model-cost-estimate').style.display = 'block';
+            document.getElementById('model-cost-value').textContent = '$' + adj.toFixed(3);
+            const ca = document.querySelector('.cost-amount');
+            if (ca) ca.textContent = '$' + adj.toFixed(3);
         }
 
         function confirmProcessing() {
-            if (pendingJobId) {
-                // Collect preferences from checkboxes
-                const preferences = {
-                    strip_headers: document.getElementById('pref-strip-headers').checked,
-                    strip_footers: document.getElementById('pref-strip-footers').checked,
-                    include_page_breaks: document.getElementById('pref-page-breaks').checked,
-                    include_page_numbers: document.getElementById('pref-page-numbers').checked,
-                    smooth_boundaries: document.getElementById('pref-smooth-boundaries').checked,
-                };
-
-                // Get selected OCR model
-                const selectedModel = document.querySelector('input[name="ocr-model"]:checked');
-                const model = selectedModel ? selectedModel.value : 'gemini-3-flash-preview';
-
-                // Page range (0-indexed for backend)
-                const pageStart = parseInt(document.getElementById('page-start').value) - 1;
-                const pageEnd = parseInt(document.getElementById('page-end').value);
-
-                fetch('/api/jobs/' + pendingJobId + '/start', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ preferences, model, page_start: pageStart, page_end: pageEnd })
-                })
-                    .then(() => {
-                        closeModal();
-                        refreshJobs();
-                    });
-            }
+            if (!pendingJobId) return;
+            const preferences = {
+                strip_headers: document.getElementById('pref-strip-headers').checked,
+                strip_footers: document.getElementById('pref-strip-footers').checked,
+                include_page_breaks: document.getElementById('pref-page-breaks').checked,
+                include_page_numbers: document.getElementById('pref-page-numbers').checked,
+                smooth_boundaries: document.getElementById('pref-smooth-boundaries').checked,
+            };
+            const sel = document.querySelector('input[name="ocr-model"]:checked');
+            const model = sel ? sel.value : 'gemini-3-flash-preview';
+            const pageStart = parseInt(document.getElementById('page-start').value);
+            const pageEnd = parseInt(document.getElementById('page-end').value);
+            fetch('/api/jobs/' + pendingJobId + '/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ preferences, model, page_start: pageStart - 1, page_end: pageEnd })
+            }).then(() => { closeModal(); refreshJobs(); });
         }
 
-        // Poll for updates
+        // === Library sidebar ===
+        function loadLibrary() {
+            fetch('/api/library').then(r => r.json()).then(data => {
+                const items = data.items || [];
+                const total = items.length;
+                const complete = items.filter(i => i.status === 'complete').length;
+                document.getElementById('lib-stats').innerHTML =
+                    `<span><strong>${total}</strong> docs</span><span><strong>${complete}</strong> done</span>`;
+                const body = document.getElementById('lib-body');
+                if (items.length === 0) {
+                    body.innerHTML = '<div class="lib-empty">No documents yet</div>';
+                    return;
+                }
+                body.innerHTML = items.map(item => {
+                    const tc = item.type === 'scan' ? 'scan' : 'upload';
+                    const tl = item.type === 'scan' ? 'Scan' : 'Upload';
+                    const sc = item.status || 'pending';
+                    let acts = '';
+                    if (item.has_ocr && item.type === 'scan') acts += `<a href="/session_ocr/${item.id}" target="_blank">DL</a>`;
+                    else if (item.has_ocr && item.type === 'upload') acts += `<a href="/api/jobs/${item.id}/download" target="_blank">DL</a>`;
+                    return `<div class="lib-item">
+                        <div class="lib-item-title" title="${item.title}">${item.title}</div>
+                        <div class="lib-item-meta">
+                            <span class="lib-badge ${tc}">${tl}</span>
+                            <span>${item.pages}p</span>
+                            <span><span class="lib-dot ${sc}"></span>${sc}</span>
+                            <span class="lib-actions">${acts}</span>
+                        </div>
+                    </div>`;
+                }).join('');
+            });
+        }
+
+        // Initial load + polling
         refreshJobs();
+        loadLibrary();
         setInterval(refreshJobs, 2000);
+        setInterval(loadLibrary, 10000);
     </script>
 </body>
 </html>
 '''
 
+
+UPLOAD_PAGE = None  # Replaced by UNIFIED_PAGE
 
 BROWSER_CAMERA_TEMPLATE = '''
 <!DOCTYPE html>
@@ -3733,14 +3611,14 @@ LIBRARY_PAGE = '''
 
 @app.route('/')
 def landing():
-    """Landing page with two routes: Upload or Camera."""
-    return render_template_string(LANDING_PAGE)
+    """Root redirects to unified upload page."""
+    return redirect('/upload')
 
 
 @app.route('/library')
 def library_page():
-    """Library page — browse all past scans and uploads."""
-    return render_template_string(LIBRARY_PAGE)
+    """Library page — redirects to unified page (library is in sidebar)."""
+    return redirect('/upload')
 
 
 @app.route('/api/library')
@@ -3751,8 +3629,8 @@ def api_library():
 
 @app.route('/upload')
 def upload_page():
-    """PDF upload page."""
-    return render_template_string(UPLOAD_PAGE)
+    """Unified page: upload + jobs + library sidebar."""
+    return render_template_string(UNIFIED_PAGE)
 
 
 @app.route('/camera')
