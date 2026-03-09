@@ -204,11 +204,14 @@ class PageSnapApp:
                         'total': len(images),
                         'current_page': None
                     })
-            except Exception as e:
+            except BaseException as e:
+                import traceback
+                error_msg = f"{type(e).__name__}: {e}"
+                print(f"[OCR ERROR] {error_msg}\n{traceback.format_exc()}")
                 with self.lock:
                     self.ocr_status.update({
                         'state': 'error',
-                        'error': str(e),
+                        'error': error_msg,
                         'current_page': None
                     })
 
@@ -1618,6 +1621,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                     <label style="width:auto; margin-bottom:6px">Book Size Guide</label>
                     <div class="preset-buttons">
                         <button class="preset-btn active" onclick="setBookPreset('none')">None</button>
+                        <button class="preset-btn" onclick="setBookPreset('openbook')">Open Book</button>
                         <button class="preset-btn" onclick="setBookPreset('paperback')">Paperback</button>
                         <button class="preset-btn" onclick="setBookPreset('trade')">Trade</button>
                         <button class="preset-btn" onclick="setBookPreset('letter')">Letter</button>
@@ -2016,6 +2020,7 @@ BROWSER_CAMERA_TEMPLATE = '''
     // Aspect ratios (width:height) for common book formats
     const BOOK_PRESETS = {
         none:      { ratio: null, label: '' },
+        openbook:  { ratio: 12 / 9, label: 'Open Book 12\u00d79' },
         paperback: { ratio: 6 / 9, label: 'Paperback 6\u00d79' },
         trade:     { ratio: 5.5 / 8.5, label: 'Trade 5.5\u00d78.5' },
         letter:    { ratio: 8.5 / 11, label: 'Letter 8.5\u00d711' },

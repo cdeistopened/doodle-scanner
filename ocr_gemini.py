@@ -17,14 +17,12 @@ from pathlib import Path
 try:
     from PIL import Image
 except ImportError:
-    print("Please install Pillow: pip install Pillow")
-    sys.exit(1)
+    Image = None
 
 try:
     import fitz  # PyMuPDF
 except ImportError:
-    print("Please install pymupdf: pip install pymupdf")
-    sys.exit(1)
+    fitz = None
 
 
 # Max dimension for captured images (long edge in pixels).
@@ -38,6 +36,8 @@ def downsample_image(image_bytes: bytes) -> bytes:
 
     Returns JPEG bytes. Skips resize if already small enough.
     """
+    if Image is None:
+        raise RuntimeError("Pillow not installed. Run: pip install Pillow")
     img = Image.open(io.BytesIO(image_bytes))
     w, h = img.size
     long_edge = max(w, h)
@@ -62,6 +62,10 @@ def images_to_pdf(image_paths: list, output_pdf_path: str) -> str:
 
     Downsamples each image before embedding. Returns the PDF path.
     """
+    if fitz is None:
+        raise RuntimeError("PyMuPDF not installed. Run: pip install pymupdf")
+    if Image is None:
+        raise RuntimeError("Pillow not installed. Run: pip install Pillow")
     doc = fitz.open()
 
     for img_path in image_paths:
