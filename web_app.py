@@ -3095,7 +3095,9 @@ HTML_TEMPLATE = '''
                 <div class="results-meta" id="results-meta">4 pages processed</div>
                 <div class="results-actions">
                     <button class="results-btn" onclick="scanMore()">Scan More</button>
-                    <a class="results-btn primary" id="download-link" href="#" target="_blank">Download Markdown</a>
+                    <a class="results-btn primary" id="download-link" href="#" target="_blank">📝 Markdown</a>
+                    <a class="results-btn" id="download-docx" href="#" target="_blank">📄 Word</a>
+                    <button class="results-btn" id="download-pdf" onclick="downloadScannedPDF()">📎 Scanned PDF</button>
                 </div>
             </div>
         </div>
@@ -3242,10 +3244,34 @@ HTML_TEMPLATE = '''
                     statusText.className = 'status-text';
                     document.getElementById('results-meta').textContent = captureCount + ' pages processed';
                     if (ocrOutputUrl) {
+                        const sessionName = document.getElementById('session-name').textContent;
                         document.getElementById('download-link').href = ocrOutputUrl;
+                        document.getElementById('download-docx').href = '/export_docx/' + sessionName;
                     }
                     break;
             }
+        }
+
+        function downloadScannedPDF() {
+            const sessionName = document.getElementById('session-name').textContent;
+            fetch('/export_pdf', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session: sessionName })
+            })
+            .then(r => {
+                if (!r.ok) throw new Error('Export failed');
+                return r.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = sessionName + '_scanned.pdf';
+                a.click();
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => alert('PDF export failed: ' + err.message));
         }
 
         function toggleSettings() {
@@ -3850,10 +3876,11 @@ def session_ocr(session_name):
 
 @app.route('/export_pdf', methods=['POST'])
 def export_pdf():
-    """Export session images as a single PDF."""
+    """Export session images as a single PDF and return as download."""
+    from db import data_path
     data = request.json
     session_name = data.get('session', page_snap.session_name)
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
+    session_path = data_path("sessions", g.user_id, session_name)
 
     if not os.path.exists(session_path):
         return jsonify({'error': f'Session not found: {session_name}'}), 404
@@ -3883,11 +3910,11 @@ def export_pdf():
                 resolution=100.0
             )
 
-        return jsonify({
-            'ok': True,
-            'output': pdf_path,
-            'page_count': len(images)
-        })
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=f"{session_name}_scanned.pdf"
+        )
     except ImportError:
         return jsonify({'error': 'Pillow not installed. Run: pip install Pillow'}), 500
     except Exception as e:
@@ -3897,7 +3924,8 @@ def export_pdf():
 @app.route('/download_pdf/<session_name>')
 def download_pdf(session_name):
     """Download the PDF for a session."""
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
+    from db import data_path
+    session_path = data_path("sessions", g.user_id, session_name)
     pdf_path = os.path.join(session_path, f"{session_name}.pdf")
 
     if not os.path.exists(pdf_path):
@@ -4078,39 +4106,36 @@ def api_download_job(job_id):
 @app.route('/export_docx/<session_name>')
 def export_docx(session_name):
     """Convert OCR markdown to .docx and serve it."""
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
+    from db import data_path
+
+    session_path = data_path("sessions", g.user_id, session_name)
 
     # Find OCR output (try default name first, then model-specific)
     md_path = os.path.join(session_path, f"{session_name}_ocr.md")
     if not os.path.exists(md_path):
         # Try any _ocr_ file
-        for f in os.listdir(session_path):
-            if f.endswith('.md') and '_ocr' in f:
-                md_path = os.path.join(session_path, f)
-                break
+        if os.path.isdir(session_path):
+            for f in os.listdir(session_path):
+                if f.endswith('.md') and '_ocr' in f:
+                    md_path = os.path.join(session_path, f)
+                    break
 
     if not os.path.exists(md_path):
         return jsonify({'error': 'No OCR output found'}), 404
 
-    with open(md_path, 'r') as f:
-        md_content = f.read()
-
     try:
-        import subprocess
-        docx_path = md_path.replace('.md', '.docx')
+        from docx_export import markdown_to_docx
 
-        # Use pandoc if available, otherwise basic conversion
-        result = subprocess.run(
-            ['pandoc', '-f', 'markdown', '-t', 'docx', '-o', docx_path, md_path],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0 and os.path.exists(docx_path):
-            return send_file(docx_path, as_attachment=True,
-                           download_name=f"{session_name}.docx")
-        else:
-            return jsonify({'error': 'pandoc conversion failed: ' + result.stderr}), 500
-    except FileNotFoundError:
-        return jsonify({'error': 'pandoc not installed. Install with: apt-get install pandoc'}), 500
+        with open(md_path, 'r') as f:
+            md_text = f.read()
+
+        docx_path = md_path.replace('.md', '.docx')
+        markdown_to_docx(md_text, docx_path)
+
+        return send_file(docx_path, as_attachment=True,
+                        download_name=f"{session_name}_ocr.docx")
+    except ImportError:
+        return jsonify({'error': 'python-docx not installed'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
