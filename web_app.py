@@ -1992,7 +1992,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                 </div>
             </div>
 
-            <div class="settings-panel" id="settings-panel">
+            <div class="settings-panel visible" id="settings-panel">
                 <h3>Settings</h3>
                 <div class="setting-row">
                     <label>Sensitivity</label>
@@ -2064,8 +2064,8 @@ BROWSER_CAMERA_TEMPLATE = '''
                 <div class="results-actions">
                     <button class="results-btn" onclick="scanMore()">Scan More</button>
                     <a class="results-btn primary" id="download-link" href="#" download>Download .md</a>
-                    <button class="results-btn" onclick="exportDocx()">Export .docx</button>
-                    <button class="results-btn" onclick="exportNotion()">Export to Notion</button>
+                    <a class="results-btn" id="download-docx" href="#" target="_blank">Export .docx</a>
+                    <button class="results-btn" id="download-pdf" onclick="downloadScannedPDF()">Scanned PDF</button>
                 </div>
                 <div class="preview-toggle">
                     <button class="active" onclick="setPreviewMode('rendered', this)">Preview</button>
@@ -2542,27 +2542,7 @@ BROWSER_CAMERA_TEMPLATE = '''
         document.getElementById('preview-raw').style.display = mode === 'raw' ? 'block' : 'none';
     }
 
-    function exportDocx() {
-        const session = document.getElementById('session-name').textContent;
-        window.open('/export_docx/' + session);
-    }
-
-    function exportNotion() {
-        const session = document.getElementById('session-name').textContent;
-        fetch('/export_notion', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: session })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) {
-                alert('Notion export error: ' + data.error);
-            } else {
-                alert('Exported to Notion! Page: ' + (data.url || data.page_id));
-            }
-        });
-    }
+    // exportDocx is now handled via <a> tag with href set in setAppState('done')
 
     function newSession() {
         if (detecting) {
@@ -2636,10 +2616,34 @@ BROWSER_CAMERA_TEMPLATE = '''
                 document.getElementById('results-meta').textContent = captureCount + ' pages processed';
                 if (ocrOutputUrl) {
                     document.getElementById('download-link').href = ocrOutputUrl;
+                    const sessionName = document.getElementById('session-name').textContent;
+                    document.getElementById('download-docx').href = '/export_docx/' + sessionName;
                     loadPreview(ocrOutputUrl);
                 }
                 break;
         }
+    }
+
+    function downloadScannedPDF() {
+        const sessionName = document.getElementById('session-name').textContent;
+        fetch('/export_pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: sessionName })
+        })
+        .then(r => {
+            if (!r.ok) throw new Error('Export failed');
+            return r.blob();
+        })
+        .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = sessionName + '_scanned.pdf';
+            a.click();
+            URL.revokeObjectURL(url);
+        })
+        .catch(err => alert('PDF export failed: ' + err.message));
     }
 
     // ===== Settings =====
