@@ -1529,27 +1529,45 @@ BROWSER_CAMERA_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Camera Scan - Doodle Scanner</title>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>Camera Scan — Doodle Scanner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --cream: #faf8f4;
-            --cream-warm: #f5f0e8;
-            --ink: #2c2c2c;
-            --ink-soft: #555;
-            --ink-muted: #888;
-            --accent: #4f46e5;
-            --success: #16a34a;
-            --error: #dc2626;
-            --border: #e5e0d8;
-            --surface: #fff;
+            --text-primary: #1c1c1d;
+            --text-secondary: #464649;
+            --text-tertiary: #78787c;
+            --text-interactive: #434fcf;
+            --page-bg: #fafafb;
+            --container-bg: #ffffff;
+            --container-highlight: #f2f2f3;
+            --container-interactive: #eef2ff;
+            --divider-subtle: #e4e4e5;
+            --divider-faint: #f2f2f3;
+            --accent: #434fcf;
+            --accent-soft: #eef2ff;
+            --accent-hover: #5b67e8;
+            --success: #268f4f;
+            --success-bg: #e8f6ec;
+            --error: #e20314;
+            --error-bg: #ffedeb;
+            --warning: #f3c305;
+            --warning-bg: #fcf2d4;
+            --radius-m: 8px;
+            --radius-l: 12px;
+            --radius-xl: 16px;
+            --shadow-1: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px -1px rgba(0,0,0,0.06);
+            --shadow-2: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.06);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Inter', sans-serif;
-            background: var(--cream);
-            color: var(--ink);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-feature-settings: "ss01", "cv01", "cv11";
+            background: var(--page-bg);
+            color: var(--text-primary);
             min-height: 100vh;
+            letter-spacing: -0.23px;
         }
         .container {
             max-width: 720px;
@@ -1557,25 +1575,28 @@ BROWSER_CAMERA_TEMPLATE = '''
             padding: 24px 20px;
         }
         .back-link {
-            display: inline-block;
-            color: var(--ink-muted);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-interactive);
             text-decoration: none;
             margin-bottom: 16px;
             font-weight: 500;
+            font-size: 14px;
         }
         .back-link:hover { text-decoration: underline; }
         h1 {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 28px;
-            margin-bottom: 8px;
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 4px;
         }
-        .subtitle { color: var(--ink-muted); margin-bottom: 24px; }
+        .subtitle { color: var(--text-tertiary); font-size: 14px; margin-bottom: 24px; }
         .scanner-frame {
-            background: var(--surface);
-            border: 2px solid var(--ink);
-            border-radius: 12px;
+            background: var(--container-bg);
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-xl);
             overflow: hidden;
-            box-shadow: 6px 6px 0 var(--ink);
+            box-shadow: var(--shadow-2);
         }
         .camera-area {
             background: #1a1a1a;
@@ -1636,28 +1657,29 @@ BROWSER_CAMERA_TEMPLATE = '''
         .main-button {
             width: 100%;
             max-width: 320px;
-            padding: 18px 32px;
-            font-size: 16px;
+            padding: 14px 28px;
+            font-size: 15px;
             font-weight: 600;
-            border: 2px solid var(--ink);
-            border-radius: 8px;
+            border: none;
+            border-radius: var(--radius-m);
             cursor: pointer;
             transition: all 0.15s;
             font-family: 'Inter', sans-serif;
-            box-shadow: 3px 3px 0 var(--ink);
+            box-shadow: var(--shadow-1);
         }
         .main-button:hover:not(:disabled) {
-            transform: translate(-2px, -2px);
-            box-shadow: 5px 5px 0 var(--ink);
+            box-shadow: var(--shadow-2);
+            transform: translateY(-1px);
         }
         .main-button:active:not(:disabled) {
-            transform: translate(2px, 2px);
-            box-shadow: 1px 1px 0 var(--ink);
+            transform: translateY(0);
+            box-shadow: none;
         }
-        .main-button:disabled { cursor: wait; opacity: 0.7; }
+        .main-button:disabled { cursor: wait; opacity: 0.6; }
         .btn-start { background: var(--accent); color: white; }
+        .btn-start:hover { background: var(--accent-hover); }
         .btn-stop { background: var(--error); color: white; }
-        .btn-processing { background: var(--ink-muted); color: white; }
+        .btn-processing { background: var(--text-tertiary); color: white; }
         .btn-done { background: var(--success); color: white; }
         .secondary-actions {
             display: flex;
@@ -1665,7 +1687,7 @@ BROWSER_CAMERA_TEMPLATE = '''
             font-size: 14px;
         }
         .secondary-actions a {
-            color: var(--ink-muted);
+            color: var(--text-tertiary);
             text-decoration: none;
             display: flex;
             align-items: center;
@@ -1673,7 +1695,7 @@ BROWSER_CAMERA_TEMPLATE = '''
         }
         .secondary-actions a:hover { color: var(--accent); }
         .photo-upload-label {
-            color: var(--accent);
+            color: var(--text-interactive);
             cursor: pointer;
             font-weight: 500;
             font-size: 14px;
@@ -1683,26 +1705,26 @@ BROWSER_CAMERA_TEMPLATE = '''
             display: none;
             padding: 24px;
             text-align: center;
-            background: var(--cream-warm);
-            border-top: 1px solid var(--border);
+            background: var(--container-highlight);
+            border-top: 1px solid var(--divider-subtle);
         }
         .pdf-ready-panel.visible { display: block; }
         .pdf-ready-icon { font-size: 36px; margin-bottom: 8px; }
         .pdf-ready-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
-        .pdf-ready-meta { color: var(--ink-muted); font-size: 13px; margin-bottom: 16px; }
+        .pdf-ready-meta { color: var(--text-tertiary); font-size: 13px; margin-bottom: 16px; }
         .pdf-ready-actions { display: flex; gap: 10px; justify-content: center; }
         .settings-panel {
             display: none;
-            background: var(--cream-warm);
+            background: var(--container-highlight);
             padding: 20px 24px;
-            border-top: 1px solid var(--border);
+            border-top: 1px solid var(--divider-subtle);
         }
         .settings-panel.visible { display: block; }
         .settings-panel h3 {
             font-size: 14px;
             font-weight: 600;
             margin-bottom: 16px;
-            color: var(--ink-soft);
+            color: var(--text-secondary);
         }
         .setting-row {
             display: flex;
@@ -1723,7 +1745,7 @@ BROWSER_CAMERA_TEMPLATE = '''
             justify-content: space-between;
             margin: -4px 0 8px 132px;
             font-size: 11px;
-            color: var(--ink-muted);
+            color: var(--text-tertiary);
             padding-right: 52px;
         }
         .results-panel {
@@ -1735,31 +1757,40 @@ BROWSER_CAMERA_TEMPLATE = '''
             text-align: center;
             margin-bottom: 16px;
         }
-        .results-icon { font-size: 48px; margin-bottom: 8px; }
+        .results-icon {
+            width: 48px; height: 48px;
+            border-radius: 50%;
+            background: var(--success-bg);
+            color: var(--success);
+            font-size: 24px;
+            line-height: 48px;
+            margin: 0 auto 12px;
+        }
         .results-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
-        .results-meta { color: var(--ink-muted); font-size: 14px; margin-bottom: 16px; }
+        .results-meta { color: var(--text-tertiary); font-size: 14px; margin-bottom: 16px; }
         .results-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
         .results-btn {
             padding: 8px 16px;
-            border: 2px solid var(--border);
-            border-radius: 6px;
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-m);
             font-size: 13px;
             font-weight: 500;
             cursor: pointer;
-            background: var(--surface);
+            background: var(--container-bg);
             text-decoration: none;
-            color: var(--ink);
+            color: var(--text-primary);
+            transition: all 0.15s;
         }
-        .results-btn:hover { background: var(--cream); }
+        .results-btn:hover { background: var(--container-highlight); }
         .results-btn.primary {
             background: var(--accent); color: white; border-color: var(--accent);
         }
-        .results-btn.primary:hover { opacity: 0.9; }
+        .results-btn.primary:hover { background: var(--accent-hover); }
         .preview-toggle {
             display: flex;
             gap: 0;
-            border: 2px solid var(--border);
-            border-radius: 6px;
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-m);
             overflow: hidden;
             margin-bottom: 12px;
         }
@@ -1767,20 +1798,20 @@ BROWSER_CAMERA_TEMPLATE = '''
             flex: 1;
             padding: 8px;
             border: none;
-            background: var(--surface);
+            background: var(--container-bg);
             font-size: 13px;
             font-weight: 500;
             cursor: pointer;
-            color: var(--ink-muted);
+            color: var(--text-tertiary);
         }
         .preview-toggle button.active {
             background: var(--accent);
             color: white;
         }
         .preview-container {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            background: var(--container-bg);
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-m);
             max-height: 400px;
             overflow-y: auto;
             text-align: left;
@@ -1799,14 +1830,14 @@ BROWSER_CAMERA_TEMPLATE = '''
             font-size: 14px;
             line-height: 1.6;
         }
-        .preview-container .rendered h1 { font-size: 24px; margin: 16px 0 8px; font-family: 'Cormorant Garamond', serif; }
-        .preview-container .rendered h2 { font-size: 20px; margin: 14px 0 6px; font-family: 'Cormorant Garamond', serif; }
-        .preview-container .rendered h3 { font-size: 16px; margin: 12px 0 4px; }
+        .preview-container .rendered h1 { font-size: 24px; margin: 16px 0 8px; font-weight: 700; }
+        .preview-container .rendered h2 { font-size: 20px; margin: 14px 0 6px; font-weight: 600; }
+        .preview-container .rendered h3 { font-size: 16px; margin: 12px 0 4px; font-weight: 600; }
         .preview-container .rendered p { margin: 0 0 10px; }
         .preview-container .rendered blockquote {
-            border-left: 3px solid var(--border);
+            border-left: 3px solid var(--divider-subtle);
             padding-left: 12px;
-            color: var(--ink-soft);
+            color: var(--text-secondary);
             margin: 8px 0;
         }
         #capture-flash {
@@ -1844,11 +1875,11 @@ BROWSER_CAMERA_TEMPLATE = '''
         }
         .preset-btn {
             padding: 4px 10px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
+            border: 1px solid var(--divider-subtle);
+            border-radius: var(--radius-m);
             font-size: 12px;
             cursor: pointer;
-            background: var(--surface);
+            background: var(--container-bg);
             transition: all 0.1s;
         }
         .preset-btn:hover { border-color: var(--accent); }
@@ -1872,13 +1903,13 @@ BROWSER_CAMERA_TEMPLATE = '''
         .camera-error {
             padding: 40px 20px;
             text-align: center;
-            color: var(--ink-soft);
+            color: var(--text-secondary);
             line-height: 1.5;
         }
-        .camera-error h2 { margin-bottom: 12px; color: var(--error); font-family: 'Cormorant Garamond', serif; }
+        .camera-error h2 { margin-bottom: 12px; color: var(--error); font-weight: 600; }
         .camera-error p { margin-bottom: 8px; font-size: 14px; }
         .camera-error code {
-            background: var(--cream-warm);
+            background: var(--container-highlight);
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 12px;
@@ -1908,7 +1939,7 @@ BROWSER_CAMERA_TEMPLATE = '''
     <span id="output-dir">{{ output_dir }}</span>
 
     <div class="container">
-        <a href="/" class="back-link">&larr; Back to Doodle Scanner</a>
+        <a href="/" class="back-link">← Back to Doodle Scanner</a>
         <h1>Camera Scan</h1>
         <p class="subtitle">Position camera over your book and flip pages</p>
 
@@ -1998,7 +2029,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                     <label style="width: auto; display:flex; align-items:center; gap:8px; cursor:pointer">
                         <input type="checkbox" id="pref-page-numbers">
                         <span style="font-size:13px">Preserve page numbers</span>
-                        <span style="font-size:11px; color:var(--ink-muted)">(hidden comments in markdown)</span>
+                        <span style="font-size:11px; color:var(--text-tertiary)">(hidden comments in markdown)</span>
                     </label>
                 </div>
                 <div class="setting-row" style="flex-direction:column; align-items:flex-start">
@@ -2006,19 +2037,19 @@ BROWSER_CAMERA_TEMPLATE = '''
                     <div style="display:flex; flex-direction:column; gap:6px; font-size:13px">
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
                             <input type="checkbox" class="model-checkbox" value="gemini-3-flash-preview" checked>
-                            <span>Gemini 3 Flash Preview <span style="color:var(--ink-muted)">(default, best accuracy)</span></span>
+                            <span>Gemini 3 Flash Preview <span style="color:var(--text-tertiary)">(default, best accuracy)</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
                             <input type="checkbox" class="model-checkbox" value="gemini-2.0-flash">
-                            <span>Gemini 2.0 Flash <span style="color:var(--ink-muted)">(faster, good quality)</span></span>
+                            <span>Gemini 2.0 Flash <span style="color:var(--text-tertiary)">(faster, good quality)</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
                             <input type="checkbox" class="model-checkbox" value="gemini-2.5-flash-lite">
-                            <span>Gemini 2.5 Flash Lite <span style="color:var(--ink-muted)">(balanced, lighter)</span></span>
+                            <span>Gemini 2.5 Flash Lite <span style="color:var(--text-tertiary)">(balanced, lighter)</span></span>
                         </label>
                         <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
                             <input type="checkbox" class="model-checkbox" value="gemini-3.1-pro-preview">
-                            <span>Gemini 3.1 Pro <span style="color:var(--ink-muted)">(highest quality, 5x cost)</span></span>
+                            <span>Gemini 3.1 Pro <span style="color:var(--text-tertiary)">(highest quality, 5x cost)</span></span>
                         </label>
                     </div>
                 </div>
@@ -2099,7 +2130,7 @@ BROWSER_CAMERA_TEMPLATE = '''
                     ? '<p>Your browser does not support camera access.</p>'
                     : '<p>Camera requires <strong>HTTPS</strong> or <strong>localhost</strong>.</p>' +
                       '<p style="margin-top:8px">Currently on: <code>' + location.origin + '</code></p>' +
-                      '<p style="margin-top:8px;font-size:13px;color:var(--ink-muted)">Run locally with: <code>python web_app.py</code> then open <code>http://localhost:5001/camera</code></p>') +
+                      '<p style="margin-top:8px;font-size:13px;color:var(--text-tertiary)">Run locally with: <code>python web_app.py</code> then open <code>http://localhost:5001/camera</code></p>') +
                 '</div>';
             return;
         }
