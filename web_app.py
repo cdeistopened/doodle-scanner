@@ -3912,10 +3912,9 @@ def session_ocr(session_name):
 @app.route('/export_pdf', methods=['POST'])
 def export_pdf():
     """Export session images as a single PDF and return as download."""
-    from db import data_path
     data = request.json
     session_name = data.get('session', page_snap.session_name)
-    session_path = data_path("sessions", g.user_id, session_name)
+    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
 
     if not os.path.exists(session_path):
         return jsonify({'error': f'Session not found: {session_name}'}), 404
@@ -3959,8 +3958,7 @@ def export_pdf():
 @app.route('/download_pdf/<session_name>')
 def download_pdf(session_name):
     """Download the PDF for a session."""
-    from db import data_path
-    session_path = data_path("sessions", g.user_id, session_name)
+    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
     pdf_path = os.path.join(session_path, f"{session_name}.pdf")
 
     if not os.path.exists(pdf_path):
@@ -4141,9 +4139,7 @@ def api_download_job(job_id):
 @app.route('/export_docx/<session_name>')
 def export_docx(session_name):
     """Convert OCR markdown to .docx and serve it."""
-    from db import data_path
-
-    session_path = data_path("sessions", g.user_id, session_name)
+    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
 
     # Find OCR output (try default name first, then model-specific)
     md_path = os.path.join(session_path, f"{session_name}_ocr.md")
