@@ -3911,7 +3911,7 @@ def session_ocr(session_name):
 
 @app.route('/export_pdf', methods=['POST'])
 def export_pdf():
-    """Export session images as a single PDF and return as download."""
+    """Compile session images into a PDF and return JSON metadata."""
     data = request.json
     session_name = data.get('session', page_snap.session_name)
     session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
@@ -3944,11 +3944,11 @@ def export_pdf():
                 resolution=100.0
             )
 
-        return send_file(
-            pdf_path,
-            as_attachment=True,
-            download_name=f"{session_name}_scanned.pdf"
-        )
+        return jsonify({
+            'ok': True,
+            'page_count': len(image_list),
+            'pdf_url': f'/download_pdf/{session_name}'
+        })
     except ImportError:
         return jsonify({'error': 'Pillow not installed. Run: pip install Pillow'}), 500
     except Exception as e:
