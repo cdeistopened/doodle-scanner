@@ -1,4216 +1,671 @@
 #!/usr/bin/env python3
 """
-Doodle Scanner - Unified OCR Service
+Scandoc 9000 — Unified document scanner + OCR.
 
-Two routes:
-1. Upload existing PDF scan → Doodle OCR pipeline
-2. Camera capture → PageSnap with motion detection
-
-Part of Doodle Reader ecosystem.
+One screen. Two inputs (camera + PDF). One output stream.
+Scan mode: classify + file to ~/scandoc-output/{category}/
+Book OCR: chunked markdown extraction via pdf_pipeline.py
 """
 from __future__ import annotations
 
-import time
 import os
+import io
 import json
-import threading
-import tempfile
+import time
 import uuid
+import base64
+import shutil
+import threading
 from pathlib import Path
 from datetime import datetime
-from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Tuple
-from flask import Flask, render_template_string, Response, jsonify, request, send_file, url_for, redirect
+
+from flask import Flask, render_template, jsonify, request, send_file, redirect
 from werkzeug.utils import secure_filename
 
-# OpenCV is optional - only needed for camera capture (local use)
 try:
-    import cv2
-    import numpy as np
-    CAMERA_AVAILABLE = True
+    from PIL import Image
 except ImportError:
-    CAMERA_AVAILABLE = False
-    # Create stub module with ndarray type for annotations
-    class _NumpyStub:
-        ndarray = type(None)  # Stub type for annotations
-    np = _NumpyStub()
-    cv2 = None
+    Image = None
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
+# =============================================================================
+# Config
+# =============================================================================
+
+DEFAULT_OUTPUT_DIR = os.path.expanduser("~/scandoc-output")
+SCAN_MODEL = "gemini-3.1-flash-lite-preview"
+BOOK_OCR_MODEL = "gemini-3-flash-preview"
+MAX_IMAGE_DIMENSION = 1500
+JPEG_QUALITY = 85
+
+# Cost estimates (per 1M tokens)
+SCAN_COST_IN = 0.25
+SCAN_COST_OUT = 1.50
+BOOK_COST_IN = 0.50
+BOOK_COST_OUT = 3.00
+TOKENS_PER_PAGE_IMG = 1800
+TOKENS_PER_PAGE_TXT = 400
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max upload
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
 
-class State(Enum):
-    IDLE = "Monitoring..."
-    TURNING = "Page turning..."
-    STABILIZING = "Stabilizing..."
-    CAPTURING = "Captured!"
-    COOLDOWN = "Cooldown..."
+# =============================================================================
+# Shared Utilities
+# =============================================================================
+
+def downsample_image(image_bytes: bytes, rotation: int = 0) -> bytes:
+    """Downsample to 1500px long edge + optional rotation."""
+    if Image is None:
+        return image_bytes
+    img = Image.open(io.BytesIO(image_bytes))
+    if rotation and rotation % 90 == 0:
+        img = img.rotate(-rotation, expand=True)
+    w, h = img.size
+    long_edge = max(w, h)
+    if long_edge > MAX_IMAGE_DIMENSION:
+        scale = MAX_IMAGE_DIMENSION / long_edge
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=JPEG_QUALITY)
+    return buf.getvalue()
+
+
+def images_to_pdf(image_paths: list, output_path: str) -> str:
+    """Compile images into a PDF."""
+    if fitz is None:
+        raise RuntimeError("PyMuPDF not installed")
+    doc = fitz.open()
+    for img_path in image_paths:
+        img = fitz.open(img_path)
+        rect = img[0].rect
+        pdf_page = doc.new_page(width=rect.width, height=rect.height)
+        pdf_page.insert_image(rect, filename=img_path)
+        img.close()
+    doc.save(output_path)
+    doc.close()
+    return output_path
+
+
+def get_gemini_client():
+    """Get Gemini API client."""
+    from google import genai
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("VITE_GEMINI_API_KEY")
+    if not api_key:
+        for env_path in [Path(__file__).parent / ".env", Path.home() / ".env"]:
+            if env_path.exists():
+                for line in open(env_path):
+                    line = line.strip()
+                    if line.startswith("GEMINI_API_KEY="):
+                        api_key = line.split("=", 1)[1].strip()
+                        break
+            if api_key:
+                break
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not found")
+    return genai.Client(api_key=api_key)
+
+
+def est_scan_cost(pages: int) -> float:
+    return round((pages * TOKENS_PER_PAGE_IMG / 1e6) * SCAN_COST_IN + (pages * TOKENS_PER_PAGE_TXT / 1e6) * SCAN_COST_OUT, 4)
+
+def est_book_cost(pages: int) -> float:
+    return round((pages * TOKENS_PER_PAGE_IMG / 1e6) * BOOK_COST_IN + (pages * TOKENS_PER_PAGE_TXT * 3 / 1e6) * BOOK_COST_OUT, 4)
+
+
+# =============================================================================
+# Scan Pipeline (from scan_my_life experiment)
+# =============================================================================
+
+CLASSIFY_PROMPT = """You are a document scanner assistant. Analyze this scanned document and return a JSON response with:
+
+1. **category**: One of: "auto", "medical", "financial", "insurance", "legal", "education", "home", "personal", "receipt", "government", "business", "misc"
+2. **title**: Short descriptive title (e.g., "Oil Change Receipt - Jiffy Lube")
+3. **slug**: Filesystem-safe slug, lowercase with hyphens
+4. **date**: Date on document in YYYY-MM-DD format, or null
+5. **text**: Complete extracted text, plain text with line breaks
+6. **summary**: One sentence description
+
+Return ONLY valid JSON, no other text."""
 
 
 @dataclass
-class Config:
-    motion_threshold: float = 3.0  # Delta above this = motion detected
-    stability_threshold: float = 1.0  # Delta below this = stable
+class ScanConfig:
+    """Camera/motion detection settings."""
+    motion_threshold: float = 3.0
+    stability_threshold: float = 1.0
     stability_delay: float = 1.0
     cooldown_period: float = 2.0
-    blur_kernel: int = 21
-    jpeg_quality: int = 90
-    detection_scale: float = 0.25
 
 
-class PageSnapDetector:
-    def __init__(self, config: Config):
-        self.config = config
-        self.state = State.IDLE
-        self.previous_frame: Optional[np.ndarray] = None
-        self.stability_start: Optional[float] = None
-        self.cooldown_start: Optional[float] = None
-        self.last_delta: float = 0.0
-    
-    def reset(self):
-        self.previous_frame = None
-        self.state = State.IDLE
-        self.stability_start = None
-        self.cooldown_start = None
-    
-    def process_frame(self, frame: np.ndarray, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[State, bool]:
-        should_capture = False
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        if roi and roi[2] > 0 and roi[3] > 0:
-            x, y, w, h = roi
-            gray = gray[y:y+h, x:x+w]
-        
-        small = cv2.resize(gray, None, fx=self.config.detection_scale, fy=self.config.detection_scale)
-        blurred = cv2.GaussianBlur(small, (self.config.blur_kernel, self.config.blur_kernel), 0)
-        
-        if self.previous_frame is None:
-            self.previous_frame = blurred
-            return self.state, False
-        
-        diff = cv2.absdiff(blurred, self.previous_frame)
-        self.last_delta = np.mean(diff)
-        
-        now = time.time()
-        
-        if self.state == State.IDLE:
-            if self.last_delta > self.config.motion_threshold:
-                self.state = State.TURNING
-        elif self.state == State.TURNING:
-            if self.last_delta < self.config.stability_threshold:
-                self.state = State.STABILIZING
-                self.stability_start = now
-        elif self.state == State.STABILIZING:
-            if self.last_delta > self.config.stability_threshold:
-                self.state = State.TURNING
-            elif self.stability_start and (now - self.stability_start) >= self.config.stability_delay:
-                self.state = State.CAPTURING
-                should_capture = True
-                self.cooldown_start = now
-        elif self.state == State.CAPTURING:
-            self.state = State.COOLDOWN
-        elif self.state == State.COOLDOWN:
-            if self.cooldown_start and (now - self.cooldown_start) >= self.config.cooldown_period:
-                self.state = State.IDLE
-        
-        self.previous_frame = blurred
-        return self.state, should_capture
+class ScanSession:
+    """Manages multi-doc scanning with eager background processing."""
 
-
-class PageSnapApp:
-    def __init__(self, camera_index: int = 0):
-        self.config = Config()
-        self.detector = PageSnapDetector(self.config) if CAMERA_AVAILABLE else None
-        self.camera_index = camera_index
-        self.cap = None
-        self.detection_active = False
-        self.capture_count = 0
-        self.roi = None  # (x, y, w, h) as percentages
-        self.frame_width = 640
-        self.frame_height = 480
+    def __init__(self, output_dir: str):
+        self.output_dir = output_dir
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.work_dir = os.path.join(output_dir, ".work", self.session_id)
+        os.makedirs(self.work_dir, exist_ok=True)
+        self.current_doc_id: Optional[str] = None
+        self.current_doc_pages: list = []
+        self.documents: list = []
+        self.process_log: list = []
+        self.session_cost: float = 0.0
+        self.config = ScanConfig()
         self.lock = threading.Lock()
-        self.last_capture_time = 0
-        self.ocr_status = self._initial_ocr_status()
-        self.ocr_thread: Optional[threading.Thread] = None
+        self._new_document()
 
-        # Session setup
-        self.session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = os.path.join(os.path.dirname(__file__), "sessions", self.session_name)
-        os.makedirs(self.output_dir, exist_ok=True)
+    def _new_document(self):
+        doc_id = f"doc_{len(self.documents) + 1:03d}"
+        os.makedirs(os.path.join(self.work_dir, doc_id), exist_ok=True)
+        self.current_doc_id = doc_id
+        self.current_doc_pages = []
 
-    def save_capture_from_bytes(self, image_bytes: bytes) -> str:
-        """Save a capture from browser-submitted image bytes.
-
-        Downsamples to MAX_IMAGE_DIMENSION on the long edge to keep
-        file sizes reasonable while preserving text sharpness for OCR.
-        """
-        from ocr_gemini import downsample_image
-
-        downsampled = downsample_image(image_bytes)
-
-        self.capture_count += 1
-        filename = f"{self.session_name}_{self.capture_count:04d}.jpg"
-        filepath = os.path.join(self.output_dir, filename)
+    def capture_page(self, image_bytes: bytes, rotation: int = 0) -> dict:
+        if not self.current_doc_id:
+            self._new_document()
+        downsampled = downsample_image(image_bytes, rotation=rotation)
+        page_num = len(self.current_doc_pages) + 1
+        filepath = os.path.join(self.work_dir, self.current_doc_id, f"page_{page_num:03d}.jpg")
         with open(filepath, 'wb') as f:
             f.write(downsampled)
-        self.last_capture_time = time.time()
+        self.current_doc_pages.append(filepath)
+        return {'doc_id': self.current_doc_id, 'page_num': page_num, 'total_pages': len(self.current_doc_pages)}
 
-        original_kb = len(image_bytes) / 1024
-        saved_kb = len(downsampled) / 1024
-        print(f"Captured (browser): {filename} ({original_kb:.0f}KB -> {saved_kb:.0f}KB)")
-        return filename
+    def next_document(self) -> dict:
+        completed = None
+        if self.current_doc_pages:
+            doc = {'id': self.current_doc_id, 'page_count': len(self.current_doc_pages),
+                   'images': list(self.current_doc_pages), 'status': 'queued'}
+            self.documents.append(doc)
+            completed = doc
+        self._new_document()
+        if completed:
+            threading.Thread(target=self._process_doc, args=(completed,), daemon=True).start()
+        return {'completed_docs': len(self.documents), 'new_doc_id': self.current_doc_id}
 
-    def _initial_ocr_status(self):
+    def finalize(self):
+        if self.current_doc_pages:
+            doc = {'id': self.current_doc_id, 'page_count': len(self.current_doc_pages),
+                   'images': list(self.current_doc_pages), 'status': 'captured'}
+            self.documents.append(doc)
+            self.current_doc_pages = []
+            self._new_document()
+
+    def _log(self, msg):
+        print(msg)
+        self.process_log.append(msg)
+
+    def _process_doc(self, doc: dict):
+        """Background: compile PDF → classify → file."""
+        doc_id = doc['id']
+        pdf_path = os.path.join(self.work_dir, doc_id, f"{doc_id}.pdf")
+
+        # Compile PDF
+        try:
+            images_to_pdf(doc['images'], pdf_path)
+            doc['pdf_path'] = pdf_path
+            doc['status'] = 'processing'
+            self._log(f"[{doc_id}] PDF compiled ({doc['page_count']}p)")
+        except Exception as e:
+            self._log(f"[{doc_id}] ERROR: {e}")
+            doc['status'] = 'error'
+            return
+
+        # Classify + extract
+        self._classify_doc(doc, pdf_path)
+
+    def _classify_doc(self, doc: dict, pdf_path: str):
+        """Run Gemini classification on a document."""
+        doc_id = doc['id']
+        try:
+            client = get_gemini_client()
+            with open(pdf_path, 'rb') as f:
+                pdf_b64 = base64.b64encode(f.read()).decode()
+            t0 = time.time()
+            response = client.models.generate_content(
+                model=SCAN_MODEL,
+                contents=[{"role": "user", "parts": [
+                    {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}},
+                    {"text": CLASSIFY_PROMPT},
+                ]}],
+                config={"max_output_tokens": 64000, "temperature": 0.1},
+            )
+            elapsed = time.time() - t0
+            cost = est_scan_cost(doc['page_count'])
+            self.session_cost += cost
+
+            raw = response.text.strip()
+            for prefix in ["```json", "```"]:
+                if raw.startswith(prefix):
+                    raw = raw[len(prefix):]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                result = {"category": "misc", "title": f"Document {doc_id}", "slug": doc_id,
+                          "date": None, "text": raw, "summary": ""}
+
+            doc.update({
+                'category': result.get('category', 'misc'),
+                'title': result.get('title', f'Document {doc_id}'),
+                'slug': result.get('slug', doc_id),
+                'date': result.get('date'),
+                'text': result.get('text', ''),
+                'summary': result.get('summary', ''),
+                'processing_time': round(elapsed, 2),
+                'cost': cost, 'status': 'classified',
+            })
+            self._log(f"[{doc_id}] {doc['category']} / {doc['title']} ({elapsed:.1f}s)")
+        except Exception as e:
+            self._log(f"[{doc_id}] ERROR classifying: {e}")
+            doc.update({'status': 'pdf_only', 'category': 'misc', 'slug': doc_id, 'cost': 0})
+
+        # File it
+        self._file_doc(doc)
+
+    def _file_doc(self, doc: dict):
+        """File document into category folder + update index."""
+        doc_id = doc['id']
+        pdf_path = doc.get('pdf_path')
+        if not pdf_path:
+            return
+
+        try:
+            cat = doc.get('category', 'misc')
+            slug = doc.get('slug', doc_id)
+            date_str = doc.get('date') or datetime.now().strftime("%Y-%m-%d")
+            cat_dir = os.path.join(self.output_dir, cat)
+            os.makedirs(cat_dir, exist_ok=True)
+
+            final_name = f"{slug}_{date_str}"
+            final_pdf = os.path.join(cat_dir, f"{final_name}.pdf")
+            c = 1
+            while os.path.exists(final_pdf):
+                final_pdf = os.path.join(cat_dir, f"{final_name}_{c}.pdf")
+                c += 1
+
+            shutil.copy2(pdf_path, final_pdf)
+            doc['final_pdf'] = final_pdf
+
+            text = doc.get('text', '')
+            if text:
+                final_txt = final_pdf.replace('.pdf', '.txt')
+                with open(final_txt, 'w') as f:
+                    f.write(text)
+                doc['final_txt'] = final_txt
+
+            # Update index
+            idx_path = os.path.join(self.output_dir, "_index.json")
+            idx = []
+            if os.path.exists(idx_path):
+                try:
+                    with open(idx_path) as f:
+                        idx = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    pass
+            idx.append({
+                'doc_id': doc_id, 'category': cat, 'title': doc.get('title', ''),
+                'slug': slug, 'date': date_str, 'summary': doc.get('summary', ''),
+                'page_count': doc['page_count'], 'model': SCAN_MODEL,
+                'processing_time': doc.get('processing_time', 0), 'cost': doc.get('cost', 0),
+                'pdf': os.path.relpath(final_pdf, self.output_dir),
+                'txt': os.path.relpath(doc['final_txt'], self.output_dir) if doc.get('final_txt') else None,
+                'scanned_at': datetime.now().isoformat(),
+            })
+            with open(idx_path, 'w') as f:
+                json.dump(idx, f, indent=2)
+
+            doc['status'] = 'filed'
+            self._log(f"[{doc_id}] Filed → {cat}/{os.path.basename(final_pdf)}")
+        except Exception as e:
+            self._log(f"[{doc_id}] ERROR filing: {e}")
+
+    def get_state(self):
         return {
-            'state': 'idle',  # idle, running, complete, error
-            'session': None,
-            'completed': 0,
-            'total': 0,
-            'current_page': None,
-            'output': None,
-            'error': None
+            'session_id': self.session_id,
+            'current_doc': self.current_doc_id,
+            'current_pages': len(self.current_doc_pages),
+            'completed_docs': len(self.documents),
+            'session_cost': round(self.session_cost, 4),
+            'documents': [{
+                'id': d['id'], 'pages': d['page_count'], 'status': d['status'],
+                'category': d.get('category'), 'title': d.get('title'),
+                'summary': d.get('summary'), 'processing_time': d.get('processing_time'),
+                'cost': d.get('cost'),
+            } for d in self.documents],
+            'process_log': self.process_log[-30:],
         }
 
-    def reset_ocr_status(self):
-        self.ocr_status = self._initial_ocr_status()
-        self.ocr_thread = None
 
-    def _start_ocr_thread(self, session_name: str, session_path: str, images: list,
-                          models: list = None, preferences: dict = None):
-        """Start OCR processing in a background thread.
+# =============================================================================
+# Book OCR Manager
+# =============================================================================
 
-        If multiple models are specified, runs OCR once per model with separate output files.
-        """
-        if not models:
-            models = ["gemini-3-flash-preview"]
-
-        def progress_callback(completed, total, current_file):
-            with self.lock:
-                self.ocr_status.update({
-                    'completed': completed,
-                    'total': total,
-                    'current_page': current_file
-                })
-
-        def worker():
-            try:
-                from ocr_gemini import process_session
-                outputs = []
-
-                for idx, model in enumerate(models):
-                    model_label = model.replace("/", "-")
-                    if len(models) > 1:
-                        # Distinct output file per model
-                        output_path = os.path.join(session_path, f"{session_name}_ocr_{model_label}.md")
-                        with self.lock:
-                            self.ocr_status['current_page'] = f"Model {idx + 1}/{len(models)}: {model}"
-                    else:
-                        output_path = None  # use default
-
-                    result_path = process_session(
-                        session_path,
-                        output_path=output_path,
-                        progress_callback=progress_callback,
-                        exit_on_error=False,
-                        model=model,
-                        preferences=preferences,
-                    )
-                    outputs.append(result_path)
-
-                with self.lock:
-                    self.ocr_status.update({
-                        'state': 'complete',
-                        'output': outputs[0] if len(outputs) == 1 else outputs,
-                        'error': None,
-                        'completed': len(images),
-                        'total': len(images),
-                        'current_page': None
-                    })
-                # Save metadata for library
-                _save_session_metadata(session_path, {
-                    'name': session_name,
-                    'type': 'scan',
-                    'pages': len(images),
-                    'status': 'complete',
-                    'has_ocr': True,
-                    'models': models,
-                    'created': session_name,
-                    'completed': datetime.now().isoformat(),
-                })
-            except BaseException as e:
-                import traceback
-                error_msg = f"{type(e).__name__}: {e}"
-                print(f"[OCR ERROR] {error_msg}\n{traceback.format_exc()}")
-                with self.lock:
-                    self.ocr_status.update({
-                        'state': 'error',
-                        'error': error_msg,
-                        'current_page': None
-                    })
-
-        with self.lock:
-            self.ocr_status.update({
-                'state': 'running',
-                'session': session_name,
-                'completed': 0,
-                'total': len(images),
-                'current_page': None,
-                'output': None,
-                'error': None
-            })
-
-        self.ocr_thread = threading.Thread(target=worker, daemon=True)
-        self.ocr_thread.start()
-
-    def trigger_ocr(self, session_name: str, models: list = None, preferences: dict = None):
-        """Validate and start OCR for a session if not already running."""
-        session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
-        if not os.path.exists(session_path):
-            return False, f"Session not found: {session_name}"
-
-        images = sorted([f for f in os.listdir(session_path) if f.endswith('.jpg')])
-        if not images:
-            return False, "No images in session"
-
-        with self.lock:
-            if self.ocr_status.get('state') == 'running':
-                return False, "OCR already running"
-
-        self._start_ocr_thread(session_name, session_path, images, models=models, preferences=preferences)
-        return True, None
-    
-    def start_camera(self):
-        if self.cap is None or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(self.camera_index)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-            self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    def stop_camera(self):
-        if self.cap:
-            self.cap.release()
-            self.cap = None
-    
-    def get_roi_pixels(self):
-        if not self.roi:
-            return None
-        x_pct, y_pct, w_pct, h_pct = self.roi
-        return (
-            int(x_pct * self.frame_width),
-            int(y_pct * self.frame_height),
-            int(w_pct * self.frame_width),
-            int(h_pct * self.frame_height)
-        )
-    
-    def save_capture(self, frame: np.ndarray):
-        """Save a captured OpenCV frame, downsampled for OCR."""
-        from ocr_gemini import MAX_IMAGE_DIMENSION
-        h, w = frame.shape[:2]
-        long_edge = max(w, h)
-        if long_edge > MAX_IMAGE_DIMENSION:
-            scale = MAX_IMAGE_DIMENSION / long_edge
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-        self.capture_count += 1
-        filename = f"{self.session_name}_{self.capture_count:04d}.jpg"
-        filepath = os.path.join(self.output_dir, filename)
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality]
-        cv2.imwrite(filepath, frame, encode_params)
-        self.last_capture_time = time.time()
-        print(f"Captured: {filename} ({frame.shape[1]}x{frame.shape[0]})")
-    
-    def generate_frames(self):
-        self.start_camera()
-        
-        while True:
-            if self.cap is None:
-                break
-                
-            ret, frame = self.cap.read()
-            if not ret:
-                continue
-            
-            original_frame = frame.copy()
-            display_frame = frame.copy()
-            
-            with self.lock:
-                state = State.IDLE
-                should_capture = False
-                
-                if self.detection_active:
-                    roi_pixels = self.get_roi_pixels()
-                    state, should_capture = self.detector.process_frame(frame, roi_pixels)
-                    
-                    if should_capture:
-                        self.save_capture(original_frame)
-                
-                # Status bar
-                h, w = display_frame.shape[:2]
-                colors = {
-                    State.IDLE: (128, 128, 128),
-                    State.TURNING: (0, 255, 255),
-                    State.STABILIZING: (255, 128, 0),
-                    State.CAPTURING: (0, 255, 0),
-                    State.COOLDOWN: (128, 128, 128),
-                }
-                color = colors.get(state, (255, 255, 255))
-                
-                cv2.rectangle(display_frame, (0, h - 50), (w, h), (0, 0, 0), -1)
-                status = state.value if self.detection_active else "PAUSED"
-                cv2.putText(display_frame, status, (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                cv2.putText(display_frame, f"Pages: {self.capture_count}", (w - 150, h - 20), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-                # Flash on capture
-                if time.time() - self.last_capture_time < 0.3:
-                    cv2.rectangle(display_frame, (0, 0), (w - 1, h - 51), (0, 255, 0), 8)
-            
-            _, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            frame_bytes = buffer.tobytes()
-            
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-
-
-# Initialize camera app - works in browser mode even without OpenCV
-page_snap = PageSnapApp(camera_index=0)
-
-
-# ============================================================================
-# PDF Upload Processing
-# ============================================================================
-
-class PDFJobManager:
-    """Manages PDF upload and processing jobs."""
-
+class BookOCRManager:
     def __init__(self):
-        self.jobs = {}  # job_id -> job_state
+        self.jobs = {}
         self.lock = threading.Lock()
         self.upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
         os.makedirs(self.upload_dir, exist_ok=True)
 
     def create_job(self, filename: str, file_path: str, page_count: int) -> str:
-        """Create a new PDF processing job."""
         job_id = str(uuid.uuid4())[:8]
         with self.lock:
             self.jobs[job_id] = {
-                'id': job_id,
-                'filename': filename,
-                'file_path': file_path,
-                'page_count': page_count,
-                'status': 'pending',  # pending, analyzing, analyzed, processing, complete, error
-                'analysis': None,
-                'preferences': None,  # User preferences for OCR
-                'progress': 0,
-                'current_chunk': None,
-                'output_path': None,
-                'error': None,
+                'id': job_id, 'filename': filename, 'file_path': file_path,
+                'page_count': page_count, 'status': 'pending',
+                'progress': 0, 'current_chunk': None, 'output_path': None, 'error': None,
+                'estimated_cost': est_book_cost(page_count),
                 'created_at': datetime.now().isoformat(),
             }
         return job_id
 
-    def get_job(self, job_id: str) -> Optional[dict]:
-        """Get job state."""
+    def get_job(self, job_id):
         with self.lock:
-            return self.jobs.get(job_id, {}).copy() if job_id in self.jobs else None
+            return self.jobs[job_id].copy() if job_id in self.jobs else None
 
-    def update_job(self, job_id: str, **kwargs):
-        """Update job state."""
+    def list_jobs(self):
         with self.lock:
-            if job_id in self.jobs:
-                self.jobs[job_id].update(kwargs)
+            return sorted([j.copy() for j in self.jobs.values()], key=lambda x: x['created_at'], reverse=True)
 
-    def list_jobs(self) -> list:
-        """List all jobs."""
-        with self.lock:
-            return sorted(
-                [j.copy() for j in self.jobs.values()],
-                key=lambda x: x['created_at'],
-                reverse=True
-            )
-
-    def analyze_job(self, job_id: str):
-        """Run pre-flight analysis on a PDF job."""
+    def start(self, job_id):
         job = self.get_job(job_id)
-        if not job:
-            return False, "Job not found"
-
-        if job['status'] != 'pending':
-            return False, f"Job already {job['status']}"
+        if not job or job['status'] not in ('pending', 'error'):
+            return False, "Not ready"
 
         def worker():
             try:
-                from pdf_pipeline import analyze_document, get_api_key, get_pdf_info
+                from pdf_pipeline import process_pdf
+                out_dir = os.path.join(app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR), "books")
+                os.makedirs(out_dir, exist_ok=True)
+                out_path = os.path.join(out_dir, f"{Path(job['filename']).stem}_ocr.md")
 
-                self.update_job(job_id, status='analyzing')
+                def progress_cb(done, total, desc):
+                    with self.lock:
+                        if job_id in self.jobs:
+                            self.jobs[job_id].update(progress=int(done/total*100) if total else 0, current_chunk=desc)
 
-                api_key = get_api_key()
+                with self.lock:
+                    self.jobs[job_id]['status'] = 'processing'
 
-                # Analyze first 20 pages (or all if fewer)
-                sample_pages = min(20, job['page_count'])
-                analysis = analyze_document(api_key, job['file_path'], sample_pages=sample_pages)
+                result = process_pdf(job['file_path'], output_path=out_path, progress_callback=progress_cb, model=BOOK_OCR_MODEL)
 
-                # Calculate cost estimate
-                # Gemini 3 Flash: ~$0.075/1M input, ~$0.30/1M output
-                words_per_page = analysis.get('estimated_words_per_page', 300)
-                total_words = words_per_page * job['page_count']
-                # Rough token estimate: 1 token ≈ 0.75 words for text, plus image tokens
-                input_tokens = job['page_count'] * 1800  # ~1800 tokens per page image
-                output_tokens = int(total_words / 0.75)  # text output
-
-                cost_input = (input_tokens / 1_000_000) * 0.075
-                cost_output = (output_tokens / 1_000_000) * 0.30
-                estimated_cost = round(cost_input + cost_output, 3)
-
-                # Estimate processing time (rough: 3-5 seconds per page)
-                estimated_minutes = round(job['page_count'] * 4 / 60, 1)
-
-                analysis['estimated_cost_usd'] = estimated_cost
-                analysis['estimated_minutes'] = estimated_minutes
-                analysis['sample_pages_analyzed'] = sample_pages
-
-                self.update_job(job_id, status='analyzed', analysis=analysis)
-
+                with self.lock:
+                    if job_id in self.jobs:
+                        self.jobs[job_id].update(status='complete', output_path=result['output_path'],
+                                                  progress=100, current_chunk=None, total_time=result.get('total_time'))
             except Exception as e:
-                self.update_job(job_id, status='error', error=str(e))
+                with self.lock:
+                    if job_id in self.jobs:
+                        self.jobs[job_id].update(status='error', error=str(e))
 
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        return True, None
-
-    def start_processing(self, job_id: str, preferences: dict = None, model: str = None, page_start: int = None, page_end: int = None):
-        """Start processing a PDF job in background thread."""
-        job = self.get_job(job_id)
-        if not job:
-            return False, "Job not found"
-
-        if job['status'] not in ('analyzed', 'pending', 'error'):
-            return False, f"Job already {job['status']}"
-
-        # Store preferences if provided
-        if preferences:
-            self.update_job(job_id, preferences=preferences)
-            job['preferences'] = preferences
-
-        # Store model selection
-        if model:
-            job['model'] = model
-
-        # Store page range
-        if page_start is not None:
-            job['page_start'] = page_start
-        if page_end is not None:
-            job['page_end'] = page_end
-
-        def worker():
-            try:
-                from pdf_pipeline import process_pdf, get_pdf_info
-
-                # Track last activity for watchdog
-                last_activity = [time.time()]
-
-                def progress_callback(completed, total, description):
-                    last_activity[0] = time.time()
-                    pct = int(completed / total * 100) if total > 0 else 0
-                    self.update_job(
-                        job_id,
-                        progress=pct,
-                        current_chunk=description,
-                        last_activity=datetime.now().isoformat()
-                    )
-
-                self.update_job(
-                    job_id,
-                    status='processing',
-                    started_at=datetime.now().isoformat(),
-                    last_activity=datetime.now().isoformat()
-                )
-
-                # Output path
-                output_dir = os.path.join(os.path.dirname(__file__), "output")
-                os.makedirs(output_dir, exist_ok=True)
-                output_path = os.path.join(output_dir, f"{job_id}_{Path(job['filename']).stem}_ocr.md")
-
-                result = process_pdf(
-                    job['file_path'],
-                    output_path=output_path,
-                    progress_callback=progress_callback,
-                    preferences=job.get('preferences'),
-                    analysis=job.get('analysis'),  # Pass pre-computed analysis
-                    model=job.get('model'),
-                    page_start=job.get('page_start'),
-                    page_end=job.get('page_end'),
-                )
-
-                # Check for partial failures
-                chunks_failed = result.get('chunks_failed', 0)
-                chunks_total = result.get('chunks_total', 0)
-
-                final_status = 'complete'
-                if chunks_failed > 0:
-                    if chunks_failed == chunks_total:
-                        final_status = 'error'
-                    else:
-                        final_status = 'complete'  # Partial success still counts as complete
-
-                self.update_job(
-                    job_id,
-                    status=final_status,
-                    output_path=result['output_path'],
-                    analysis=result.get('analysis'),
-                    total_chars=result.get('total_chars'),
-                    total_time=result.get('total_time'),
-                    chunks_total=chunks_total,
-                    chunks_failed=chunks_failed,
-                    progress=100,
-                    current_chunk=None,
-                    completed_at=datetime.now().isoformat()
-                )
-
-            except Exception as e:
-                import traceback
-                error_detail = f"{str(e)}\n{traceback.format_exc()}"
-                print(f"[ERROR] Job {job_id} failed: {error_detail}")
-                self.update_job(
-                    job_id,
-                    status='error',
-                    error=str(e),
-                    error_detail=error_detail,
-                    completed_at=datetime.now().isoformat()
-                )
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
+        threading.Thread(target=worker, daemon=True).start()
         return True, None
 
 
-pdf_manager = PDFJobManager()
-
-
-# ============================================================================
-# Session Metadata (persistent library)
-# ============================================================================
-
-def _save_session_metadata(session_path: str, meta: dict):
-    """Save metadata JSON alongside a session for the library view."""
-    meta_path = os.path.join(session_path, "metadata.json")
-    try:
-        # Merge with existing metadata if present
-        existing = {}
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                existing = json.load(f)
-        existing.update(meta)
-        with open(meta_path, 'w') as f:
-            json.dump(existing, f, indent=2)
-    except Exception as e:
-        print(f"[WARN] Failed to save metadata: {e}")
-
-
-def _get_library_items() -> list:
-    """Get all items for the library — camera sessions + PDF uploads."""
-    items = []
-
-    # Camera sessions (from disk)
-    sessions_dir = os.path.join(os.path.dirname(__file__), "sessions")
-    if os.path.exists(sessions_dir):
-        for name in sorted(os.listdir(sessions_dir), reverse=True):
-            session_path = os.path.join(sessions_dir, name)
-            if not os.path.isdir(session_path):
-                continue
-
-            images = [f for f in os.listdir(session_path) if f.endswith('.jpg')]
-            has_ocr = os.path.exists(os.path.join(session_path, f"{name}_ocr.md"))
-            has_pdf = os.path.exists(os.path.join(session_path, f"{name}.pdf"))
-
-            # Load metadata if it exists
-            meta = {}
-            meta_path = os.path.join(session_path, "metadata.json")
-            if os.path.exists(meta_path):
-                try:
-                    with open(meta_path) as f:
-                        meta = json.load(f)
-                except Exception:
-                    pass
-
-            # Get file sizes
-            ocr_size = 0
-            if has_ocr:
-                ocr_path = os.path.join(session_path, f"{name}_ocr.md")
-                ocr_size = os.path.getsize(ocr_path)
-
-            # Parse date from session name (format: YYYYMMDD_HHMMSS)
-            created = meta.get('created', name)
-            try:
-                dt = datetime.strptime(name, "%Y%m%d_%H%M%S")
-                date_display = dt.strftime("%b %d, %Y %I:%M %p")
-            except ValueError:
-                date_display = name
-
-            items.append({
-                'id': name,
-                'title': meta.get('title', name),
-                'type': 'scan',
-                'pages': len(images),
-                'status': 'complete' if has_ocr else ('pending' if images else 'empty'),
-                'date': date_display,
-                'date_sort': name,
-                'has_ocr': has_ocr,
-                'has_pdf': has_pdf,
-                'ocr_size': ocr_size,
-                'ocr_words': meta.get('ocr_words', 0),
-            })
-
-    # PDF upload jobs (from job manager — in-memory, plus any on disk)
-    output_dir = os.path.join(os.path.dirname(__file__), "output")
-    for job in pdf_manager.list_jobs():
-        items.append({
-            'id': job['id'],
-            'title': job.get('filename', job['id']),
-            'type': 'upload',
-            'pages': job.get('page_count', 0),
-            'status': job.get('status', 'unknown'),
-            'date': job.get('created_at', '')[:19].replace('T', ' '),
-            'date_sort': job.get('created_at', ''),
-            'has_ocr': job.get('status') == 'complete',
-            'has_pdf': True,
-            'ocr_size': 0,
-            'ocr_words': 0,
-        })
-
-    # Sort by date descending
-    items.sort(key=lambda x: x['date_sort'], reverse=True)
-    return items
-
-
-# ============================================================================
-# HTML Templates
-# ============================================================================
-
-LANDING_PAGE = None  # Replaced by unified page — "/" now redirects to "/upload"
-
-
-UNIFIED_PAGE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Doodle Scanner</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --text-primary: #1c1c1d;
-            --text-secondary: #464649;
-            --text-tertiary: #78787c;
-            --text-interactive: #434fcf;
-            --page-bg: #fafafb;
-            --container-bg: #ffffff;
-            --container-highlight: #f2f2f3;
-            --container-interactive: #eef2ff;
-            --divider-subtle: #e4e4e5;
-            --divider-faint: #f2f2f3;
-            --accent: #434fcf;
-            --accent-soft: #eef2ff;
-            --accent-hover: #5b67e8;
-            --success: #268f4f;
-            --success-bg: #e8f6ec;
-            --error: #e20314;
-            --error-bg: #ffedeb;
-            --warning: #f3c305;
-            --warning-bg: #fcf2d4;
-            --radius-m: 8px;
-            --radius-l: 12px;
-            --radius-xl: 16px;
-            --radius-pill: 1000px;
-            --shadow-1: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px -1px rgba(0,0,0,0.06);
-            --shadow-2: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.06);
-            --shadow-4: 0 20px 25px -5px rgba(0,0,0,0.08), 0 8px 10px -6px rgba(0,0,0,0.06);
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            font-feature-settings: "ss01", "cv01", "cv11";
-            background: var(--page-bg);
-            color: var(--text-primary);
-            min-height: 100vh;
-            letter-spacing: -0.23px;
-        }
-
-        /* === Header === */
-        .top-bar {
-            padding: 12px 24px;
-            border-bottom: 1px solid var(--divider-subtle);
-            background: var(--container-bg);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        .top-bar-left {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        .brand {
-            font-size: 16px;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-        }
-        .brand-sub {
-            font-size: 12px;
-            color: var(--text-tertiary);
-        }
-        .top-bar-right {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .nav-link {
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-decoration: none;
-            padding: 6px 12px;
-            border-radius: var(--radius-m);
-            transition: all 0.12s;
-        }
-        .nav-link:hover {
-            background: var(--container-highlight);
-            color: var(--text-primary);
-        }
-
-        /* === Layout: two columns === */
-        .layout {
-            display: grid;
-            grid-template-columns: 1fr 340px;
-            gap: 0;
-            min-height: calc(100vh - 49px);
-        }
-        @media (max-width: 900px) {
-            .layout {
-                grid-template-columns: 1fr;
-            }
-            .sidebar { display: none; }
-        }
-
-        /* === Main panel (left) === */
-        .main-panel {
-            padding: 32px 48px;
-            max-width: 768px;
-            margin: 0 auto;
-            width: 100%;
-        }
-        .page-title {
-            font-size: 22px;
-            font-weight: 600;
-            letter-spacing: -0.5px;
-            margin-bottom: 4px;
-        }
-        .page-subtitle {
-            font-size: 14px;
-            color: var(--text-tertiary);
-            margin-bottom: 24px;
-        }
-
-        /* Upload zone */
-        .upload-zone {
-            border: 2px dashed var(--divider-subtle);
-            border-radius: var(--radius-xl);
-            padding: 40px;
-            text-align: center;
-            margin-bottom: 24px;
-            transition: all 0.15s;
-            cursor: pointer;
-            background: var(--container-bg);
-        }
-        .upload-zone:hover, .upload-zone.dragover {
-            border-color: var(--accent);
-            background: var(--accent-soft);
-        }
-        .upload-zone.uploading {
-            border-color: var(--text-tertiary);
-            opacity: 0.7;
-            pointer-events: none;
-        }
-        .upload-icon { font-size: 32px; margin-bottom: 10px; }
-        .upload-text { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-        .upload-hint { font-size: 12px; color: var(--text-tertiary); }
-        #file-input { display: none; }
-
-        /* Jobs section */
-        .jobs-section {
-            background: var(--container-bg);
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-xl);
-            padding: 20px;
-            box-shadow: var(--shadow-1);
-        }
-        .jobs-section h2 {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: var(--text-secondary);
-        }
-        .job-list { list-style: none; }
-        .job-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            padding: 12px 0;
-            border-bottom: 1px solid var(--divider-faint);
-        }
-        .job-item:last-child { border-bottom: none; }
-        .job-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
-        .job-meta { font-size: 11px; color: var(--text-tertiary); }
-        .job-status {
-            padding: 3px 10px;
-            border-radius: var(--radius-pill);
-            font-size: 11px;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-        .status-pending { background: var(--container-highlight); color: var(--text-tertiary); }
-        .status-analyzing { background: var(--warning-bg); color: #745c00; }
-        .status-analyzed { background: var(--accent-soft); color: var(--accent); }
-        .status-processing { background: var(--accent-soft); color: var(--accent); }
-        .status-complete { background: var(--success-bg); color: var(--success); }
-        .status-error { background: var(--error-bg); color: var(--error); }
-        .job-actions { display: flex; gap: 6px; margin-top: 6px; }
-        .chunk-links { margin-top: 4px; font-size: 11px; }
-        .chunk-links a {
-            color: var(--accent);
-            text-decoration: none;
-            margin-right: 6px;
-        }
-        .chunk-links a:hover { text-decoration: underline; }
-        .job-btn {
-            padding: 4px 10px;
-            font-size: 11px;
-            font-weight: 600;
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-m);
-            cursor: pointer;
-            background: var(--container-bg);
-            color: var(--text-primary);
-            text-decoration: none;
-            transition: all 0.12s;
-        }
-        .job-btn:hover { background: var(--container-highlight); }
-        .job-btn.primary {
-            background: var(--accent);
-            color: white;
-            border-color: var(--accent);
-        }
-        .job-btn.primary:hover { background: var(--accent-hover); }
-        .job-progress { margin-top: 6px; font-size: 11px; color: var(--text-tertiary); }
-        .empty-state { text-align: center; padding: 24px; color: var(--text-tertiary); font-size: 13px; }
-
-        /* Thinking animation */
-        @keyframes shimmer {
-            0%, 100% { opacity: 0.4; }
-            50% { opacity: 1; }
-        }
-        .thinking-dots {
-            display: inline-flex;
-            gap: 3px;
-            margin-left: 4px;
-        }
-        .thinking-dots span {
-            display: inline-block;
-            width: 4px;
-            height: 4px;
-            border-radius: 50%;
-            background: var(--accent);
-            animation: shimmer 1.4s ease-in-out infinite;
-        }
-        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
-        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-        .thinking-status {
-            font-size: 11px;
-            color: var(--accent);
-            font-style: italic;
-            margin-top: 4px;
-        }
-
-        /* === Modal === */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.50);
-            backdrop-filter: blur(4px);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
-        }
-        .modal-overlay.active { display: flex; }
-        .modal {
-            background: var(--container-bg);
-            border-radius: var(--radius-xl);
-            padding: 24px;
-            max-width: 500px;
-            width: 92%;
-            max-height: 85vh;
-            overflow-y: auto;
-            box-shadow: var(--shadow-4);
-        }
-        .modal h2 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 14px;
-            letter-spacing: -0.5px;
-        }
-        .settings-toggle {
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            cursor: pointer;
-            padding: 8px 0 4px;
-            list-style: none;
-            user-select: none;
-        }
-        .settings-toggle::-webkit-details-marker { display: none; }
-        .settings-toggle::before { content: '\\25B8 '; font-size: 10px; color: var(--text-tertiary); }
-        details[open] > .settings-toggle::before { content: '\\25BE '; }
-        .page-range-section {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 0;
-            font-size: 13px;
-        }
-        .page-range-section input[type="number"] {
-            width: 60px;
-            padding: 5px 6px;
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-m);
-            font-size: 13px;
-            text-align: center;
-        }
-        .page-range-section label { color: var(--text-tertiary); font-size: 12px; }
-        .analysis-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 6px 0;
-            border-bottom: 1px solid var(--divider-faint);
-            font-size: 13px;
-        }
-        .analysis-label { color: var(--text-tertiary); }
-        .analysis-value { font-weight: 500; }
-        .cost-box {
-            background: var(--accent-soft);
-            border-radius: var(--radius-m);
-            padding: 14px;
-            margin: 14px 0;
-            text-align: center;
-        }
-        .cost-amount { font-size: 24px; font-weight: 700; color: var(--accent); }
-        .cost-label { font-size: 12px; color: var(--text-tertiary); }
-        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
-        .modal-btn {
-            flex: 1;
-            padding: 10px 16px;
-            border-radius: var(--radius-l);
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            border: 1px solid var(--divider-subtle);
-            background: var(--container-bg);
-            transition: all 0.12s;
-        }
-        .modal-btn.primary {
-            background: var(--accent);
-            border-color: var(--accent);
-            color: white;
-        }
-        .modal-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
-        .preference-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 0;
-            cursor: pointer;
-            font-size: 13px;
-        }
-        .preference-item input[type="checkbox"] {
-            width: 16px;
-            height: 16px;
-            accent-color: var(--accent);
-        }
-        .preference-item .pref-detail {
-            font-size: 11px;
-            color: var(--text-tertiary);
-            font-style: italic;
-        }
-        .cost-estimate-live {
-            font-size: 12px;
-            color: var(--text-tertiary);
-            margin-top: 8px;
-            padding: 6px 10px;
-            background: var(--container-highlight);
-            border-radius: var(--radius-m);
-        }
-        .cost-estimate-live .cost-value {
-            font-weight: 600;
-            color: var(--text-secondary);
-        }
-
-        /* === Sidebar (library) === */
-        .sidebar {
-            border-left: 1px solid var(--divider-subtle);
-            background: var(--container-bg);
-            overflow-y: auto;
-            max-height: calc(100vh - 49px);
-            position: sticky;
-            top: 49px;
-        }
-        .sidebar-header {
-            padding: 16px 16px 12px;
-            border-bottom: 1px solid var(--divider-faint);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        .sidebar-header h2 {
-            font-size: 14px;
-            font-weight: 600;
-        }
-        .sidebar-stats {
-            display: flex;
-            gap: 12px;
-            font-size: 11px;
-            color: var(--text-tertiary);
-        }
-        .sidebar-stats strong {
-            color: var(--text-primary);
-            font-size: 14px;
-            display: block;
-        }
-        .lib-item {
-            padding: 10px 16px;
-            border-bottom: 1px solid var(--divider-faint);
-            font-size: 12px;
-            transition: background 0.1s;
-            cursor: default;
-        }
-        .lib-item:hover { background: var(--container-highlight); }
-        .lib-item-title {
-            font-weight: 600;
-            font-size: 13px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            margin-bottom: 2px;
-        }
-        .lib-item-meta {
-            color: var(--text-tertiary);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .lib-badge {
-            display: inline-block;
-            padding: 1px 6px;
-            border-radius: var(--radius-pill);
-            font-size: 10px;
-            font-weight: 600;
-        }
-        .lib-badge.scan { background: var(--accent-soft); color: var(--accent); }
-        .lib-badge.upload { background: var(--warning-bg); color: #745c00; }
-        .lib-dot {
-            display: inline-block;
-            width: 6px; height: 6px;
-            border-radius: 50%;
-            margin-right: 4px;
-        }
-        .lib-dot.complete { background: var(--success); }
-        .lib-dot.pending { background: var(--divider-subtle); }
-        .lib-dot.processing { background: var(--warning); }
-        .lib-dot.error { background: var(--error); }
-        .lib-actions a {
-            font-size: 11px;
-            color: var(--accent);
-            text-decoration: none;
-            margin-right: 8px;
-        }
-        .lib-actions a:hover { text-decoration: underline; }
-        .lib-empty {
-            padding: 32px 16px;
-            text-align: center;
-            color: var(--text-tertiary);
-            font-size: 13px;
-        }
-    </style>
-</head>
-<body>
-    <!-- Top bar -->
-    <div class="top-bar">
-        <div class="top-bar-left">
-            <span class="brand">Doodle Scanner</span>
-            <span class="brand-sub">PDF to Markdown</span>
-        </div>
-        <div class="top-bar-right">
-            <a href="/camera" class="nav-link">Camera</a>
-        </div>
-    </div>
-
-    <div class="layout">
-        <!-- Main panel -->
-        <div class="main-panel">
-            <div class="page-title">Upload PDF</div>
-            <div class="page-subtitle">Drop a scanned book or document for OCR extraction</div>
-
-            <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
-                <div class="upload-icon">+</div>
-                <div class="upload-text">Drop PDF here or click to browse</div>
-                <div class="upload-hint">Max 100MB</div>
-                <input type="file" id="file-input" accept=".pdf" onchange="handleFile(this.files[0])">
-            </div>
-
-            <div class="jobs-section">
-                <h2>Jobs</h2>
-                <ul class="job-list" id="job-list">
-                    <li class="empty-state">Upload a PDF to get started.</li>
-                </ul>
-            </div>
-        </div>
-
-        <!-- Sidebar: Library -->
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <h2>Library</h2>
-                <div class="sidebar-stats" id="lib-stats"></div>
-            </div>
-            <div id="lib-body">
-                <div class="lib-empty">Loading...</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Analysis Confirmation Modal -->
-    <div class="modal-overlay" id="analysis-modal">
-        <div class="modal">
-            <h2>Document Analysis</h2>
-            <div id="analysis-content"></div>
-
-            <!-- Page Range -->
-            <div class="page-range-section">
-                <span style="font-weight:600">Pages:</span>
-                <input type="number" id="page-start" min="1" value="1">
-                <span style="color:var(--text-tertiary)">to</span>
-                <input type="number" id="page-end" min="1" value="1">
-                <label>(of <span id="page-total">?</span>)</label>
-            </div>
-
-            <!-- Settings in collapsible -->
-            <details>
-                <summary class="settings-toggle">Settings</summary>
-                <div style="padding: 6px 0 4px;">
-                    <label class="preference-item">
-                        <input type="checkbox" id="pref-strip-headers" checked>
-                        <span>Strip running headers</span>
-                        <span class="pref-detail" id="header-detail"></span>
-                    </label>
-                    <label class="preference-item">
-                        <input type="checkbox" id="pref-strip-footers" checked>
-                        <span>Strip running footers</span>
-                        <span class="pref-detail" id="footer-detail"></span>
-                    </label>
-                    <label class="preference-item">
-                        <input type="checkbox" id="pref-page-breaks">
-                        <span>Include page breaks (---)</span>
-                    </label>
-                    <label class="preference-item">
-                        <input type="checkbox" id="pref-page-numbers">
-                        <span>Include page numbers</span>
-                    </label>
-                    <label class="preference-item">
-                        <input type="checkbox" id="pref-smooth-boundaries" checked>
-                        <span>AI boundary smoothing</span>
-                        <span class="pref-detail">(fixes broken sentences)</span>
-                    </label>
-                </div>
-                <div style="border-top: 1px solid var(--divider-faint); margin-top: 8px; padding-top: 10px;">
-                    <h3 style="font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text-secondary);">OCR Model</h3>
-                    <div style="display:flex; flex-direction:column; gap:4px; font-size:12px">
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-3-flash-preview" checked onchange="updateCostEstimate()">
-                            <span>Gemini 3 Flash <span style="color:var(--text-tertiary)">$0.50/M</span></span>
-                        </label>
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-2.0-flash" onchange="updateCostEstimate()">
-                            <span>Gemini 2.0 Flash <span style="color:var(--text-tertiary)">$0.10/M</span></span>
-                        </label>
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-2.5-flash-lite" onchange="updateCostEstimate()">
-                            <span>Gemini 2.5 Flash Lite <span style="color:var(--text-tertiary)">$0.30/M</span></span>
-                        </label>
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
-                            <input type="radio" name="ocr-model" value="gemini-3.1-pro-preview" onchange="updateCostEstimate()">
-                            <span>Gemini 3.1 Pro <span style="color:var(--text-tertiary)">$2.50/M</span></span>
-                        </label>
-                    </div>
-                    <div class="cost-estimate-live" id="model-cost-estimate" style="display:none">
-                        Est: <span class="cost-value" id="model-cost-value"></span>
-                    </div>
-                </div>
-            </details>
-
-            <div class="modal-actions">
-                <button class="modal-btn" onclick="closeModal()">Cancel</button>
-                <button class="modal-btn primary" onclick="confirmProcessing()">Start Processing</button>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        let pendingJobId = null;
-        const uploadZone = document.getElementById('upload-zone');
-
-        // Drag and drop
-        uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
-        uploadZone.addEventListener('dragleave', () => { uploadZone.classList.remove('dragover'); });
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadZone.classList.remove('dragover');
-            const file = e.dataTransfer.files[0];
-            if (file && file.type === 'application/pdf') handleFile(file);
-        });
-
-        function handleFile(file) {
-            if (!file || file.type !== 'application/pdf') { alert('Please select a PDF file'); return; }
-            uploadZone.classList.add('uploading');
-            uploadZone.querySelector('.upload-text').innerHTML = 'Uploading<span class="thinking-dots"><span></span><span></span><span></span></span>';
-            const formData = new FormData();
-            formData.append('file', file);
-            fetch('/api/upload', { method: 'POST', body: formData })
-                .then(r => r.json())
-                .then(data => {
-                    uploadZone.classList.remove('uploading');
-                    uploadZone.querySelector('.upload-text').textContent = 'Drop PDF here or click to browse';
-                    if (data.error) { alert('Upload failed: ' + data.error); }
-                    else {
-                        pendingJobId = data.job_id;
-                        fetch('/api/jobs/' + data.job_id + '/analyze', { method: 'POST' });
-                        refreshJobs();
-                        pollForAnalysis(data.job_id);
-                    }
-                })
-                .catch(err => {
-                    uploadZone.classList.remove('uploading');
-                    uploadZone.querySelector('.upload-text').textContent = 'Drop PDF here or click to browse';
-                    alert('Upload failed: ' + err);
-                });
-        }
-
-        function refreshJobs() {
-            fetch('/api/jobs').then(r => r.json()).then(data => {
-                const list = document.getElementById('job-list');
-                if (data.jobs.length === 0) {
-                    list.innerHTML = '<li class="empty-state">Upload a PDF to get started.</li>';
-                    return;
-                }
-                list.innerHTML = data.jobs.map(job => {
-                    const statusClass = 'status-' + job.status;
-                    const statusText = job.status.charAt(0).toUpperCase() + job.status.slice(1);
-                    let actions = '';
-                    if (job.status === 'complete' && job.output_path) {
-                        actions = `<a href="/api/jobs/${job.id}/download" class="job-btn primary">Download</a>
-                                   <button onclick="toggleChunks('${job.id}', ${job.chunks_total || 0})" class="job-btn">Chunks</button>`;
-                    } else if (job.status === 'pending') {
-                        actions = `<button onclick="analyzeJob('${job.id}')" class="job-btn primary">Analyze</button>`;
-                    } else if (job.status === 'analyzed') {
-                        actions = `<button onclick="showAnalysisModal(${JSON.stringify(job).replace(/"/g, '&quot;')})" class="job-btn primary">Review & Start</button>`;
-                    } else if (job.status === 'processing' || job.status === 'analyzing') {
-                        actions = `<button onclick="cancelJob('${job.id}')" class="job-btn" style="color: var(--error);">Cancel</button>`;
-                    } else if (job.status === 'error') {
-                        actions = `<button onclick="retryJob('${job.id}')" class="job-btn">Retry</button>`;
-                    }
-
-                    let progress = '';
-                    if (job.status === 'analyzing') {
-                        const verbs = ['Squinting at your pages','Counting footnotes','Deciphering margins','Inspecting the typography','Admiring the layout','Reading between the lines','Consulting the font spirits'];
-                        const verb = verbs[Math.floor(Date.now() / 3000) % verbs.length];
-                        progress = `<div class="thinking-status">${verb}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
-                    } else if (job.status === 'processing' && job.current_chunk) {
-                        const pct = job.progress || 0;
-                        const filled = Math.floor(pct / 5);
-                        const bar = String.fromCodePoint(0x2588).repeat(filled) + String.fromCodePoint(0x2591).repeat(20 - filled);
-                        progress = `<div class="job-progress">${bar} ${pct}%<br><span style="color:var(--accent);font-style:italic">${job.current_chunk}</span></div>`;
-                    } else if (job.status === 'processing') {
-                        const verbs2 = ['Warming up the vision engines','Teaching Gemini to read','Converting pixels to prose','Extracting the good stuff'];
-                        const verb2 = verbs2[Math.floor(Date.now() / 3000) % verbs2.length];
-                        progress = `<div class="thinking-status">${verb2}<span class="thinking-dots"><span></span><span></span><span></span></span></div>`;
-                    } else if (job.status === 'complete' && job.chunks_failed > 0) {
-                        progress = `<div class="job-progress" style="color: #745c00;">&#9888; ${job.chunks_failed}/${job.chunks_total} chunks failed</div>`;
-                    } else if (job.status === 'error' && job.error) {
-                        progress = `<div class="job-progress" style="color: var(--error);">Error: ${job.error.substring(0, 100)}</div>`;
-                    }
-
-                    let meta = `${job.page_count} pages`;
-                    if (job.analysis && job.analysis.estimated_cost_usd) meta += ` &#183; Est. $${job.analysis.estimated_cost_usd.toFixed(3)}`;
-                    if (job.analysis && job.analysis.language) meta += ` &#183; ${job.analysis.language.charAt(0).toUpperCase() + job.analysis.language.slice(1)}`;
-
-                    return `<li class="job-item">
-                        <div style="flex:1">
-                            <div class="job-name">${job.filename}</div>
-                            <div class="job-meta">${meta}</div>
-                            ${progress}
-                            <div class="job-actions">${actions}</div>
-                            <div class="chunk-links" id="chunks-${job.id}" style="display:none"></div>
-                        </div>
-                        <span class="job-status ${statusClass}">${statusText}</span>
-                    </li>`;
-                }).join('');
-            });
-        }
-
-        function startJob(jobId) { fetch('/api/jobs/' + jobId + '/start', { method: 'POST' }).then(() => refreshJobs()); }
-        function cancelJob(jobId) { if (confirm('Cancel this job?')) fetch('/api/jobs/' + jobId + '/cancel', { method: 'POST' }).then(() => refreshJobs()); }
-        function retryJob(jobId) { fetch('/api/jobs/' + jobId + '/start', { method: 'POST' }).then(() => refreshJobs()); }
-
-        function toggleChunks(jobId, totalChunks) {
-            const el = document.getElementById('chunks-' + jobId);
-            if (!el) return;
-            if (el.style.display !== 'none') { el.style.display = 'none'; return; }
-            if (totalChunks === 0) { el.innerHTML = '<span style="color:var(--text-tertiary)">No chunk data</span>'; el.style.display = 'block'; return; }
-            fetch('/api/jobs/' + jobId + '/chunks').then(r => r.json()).then(data => {
-                if (data.chunks && data.chunks.length) {
-                    el.innerHTML = data.chunks.map((c, i) => `<a href="/api/jobs/${jobId}/chunks/${i+1}/download" title="${c.pages}">${c.label}</a>`).join('');
-                } else {
-                    el.innerHTML = '<span style="color:var(--text-tertiary)">Chunks not saved</span>';
-                }
-                el.style.display = 'block';
-            });
-        }
-
-        function analyzeJob(jobId) {
-            pendingJobId = jobId;
-            fetch('/api/jobs/' + jobId + '/analyze', { method: 'POST' }).then(() => { refreshJobs(); pollForAnalysis(jobId); });
-        }
-
-        function pollForAnalysis(jobId) {
-            const poll = setInterval(() => {
-                fetch('/api/jobs/' + jobId).then(r => r.json()).then(job => {
-                    if (job.status === 'analyzed' && job.analysis) { clearInterval(poll); showAnalysisModal(job); }
-                    else if (job.status === 'error') { clearInterval(poll); alert('Analysis failed: ' + job.error); }
-                });
-            }, 1000);
-        }
-
-        function showAnalysisModal(job) {
-            pendingJobId = job.id;
-            const a = job.analysis;
-            document.getElementById('analysis-content').innerHTML = `
-                <div class="analysis-item"><span class="analysis-label">Document</span><span class="analysis-value">${job.filename}</span></div>
-                <div class="analysis-item"><span class="analysis-label">Pages</span><span class="analysis-value">${job.page_count}</span></div>
-                <div class="analysis-item"><span class="analysis-label">Type</span><span class="analysis-value">${a.document_type || 'Unknown'}</span></div>
-                <div class="analysis-item"><span class="analysis-label">Language</span><span class="analysis-value">${(a.language || 'Unknown').charAt(0).toUpperCase() + (a.language || 'unknown').slice(1)}</span></div>
-                <div class="analysis-item"><span class="analysis-label">Two Columns</span><span class="analysis-value">${a.has_two_columns ? 'Yes' : 'No'}</span></div>
-                <div class="analysis-item"><span class="analysis-label">Footnotes</span><span class="analysis-value">${a.has_footnotes ? 'Yes (' + (a.footnote_style || 'numbered') + ')' : 'No'}</span></div>
-                <div class="analysis-item"><span class="analysis-label">Est. Time</span><span class="analysis-value">~${a.estimated_minutes || '?'} min</span></div>
-                <div class="cost-box">
-                    <div class="cost-label">Estimated API Cost</div>
-                    <div class="cost-amount">$${(a.estimated_cost_usd || 0).toFixed(3)}</div>
-                    <div class="cost-label">Based on ${a.sample_pages_analyzed || '?'} sample pages</div>
-                </div>
-                ${a.notes ? `<p style="font-size:12px;color:var(--text-tertiary);margin-top:8px"><strong>Notes:</strong> ${a.notes}</p>` : ''}`;
-
-            const hd = document.getElementById('header-detail');
-            const fd = document.getElementById('footer-detail');
-            hd.textContent = a.running_header_text ? '"' + a.running_header_text + '"' : a.has_headers_footers ? '(detected)' : '(none detected)';
-            fd.textContent = a.running_footer_text ? '"' + a.running_footer_text + '"' : '(none detected)';
-
-            document.getElementById('page-start').value = 1;
-            document.getElementById('page-start').max = job.page_count;
-            document.getElementById('page-end').value = job.page_count;
-            document.getElementById('page-end').max = job.page_count;
-            document.getElementById('page-total').textContent = job.page_count;
-
-            baseCostUsd = a.estimated_cost_usd || 0;
-            const dm = document.querySelector('input[name="ocr-model"][value="gemini-3-flash-preview"]');
-            if (dm) dm.checked = true;
-            updateCostEstimate();
-            document.getElementById('analysis-modal').classList.add('active');
-        }
-
-        function closeModal() { document.getElementById('analysis-modal').classList.remove('active'); pendingJobId = null; }
-
-        const MODEL_COST_MULTIPLIERS = { 'gemini-2.0-flash': 0.2, 'gemini-2.5-flash-lite': 0.6, 'gemini-3-flash-preview': 1.0, 'gemini-3.1-pro-preview': 5.0 };
-        let baseCostUsd = 0;
-
-        function updateCostEstimate() {
-            const sel = document.querySelector('input[name="ocr-model"]:checked');
-            if (!sel || !baseCostUsd) return;
-            const adj = baseCostUsd * (MODEL_COST_MULTIPLIERS[sel.value] || 1.0);
-            document.getElementById('model-cost-estimate').style.display = 'block';
-            document.getElementById('model-cost-value').textContent = '$' + adj.toFixed(3);
-            const ca = document.querySelector('.cost-amount');
-            if (ca) ca.textContent = '$' + adj.toFixed(3);
-        }
-
-        function confirmProcessing() {
-            if (!pendingJobId) return;
-            const preferences = {
-                strip_headers: document.getElementById('pref-strip-headers').checked,
-                strip_footers: document.getElementById('pref-strip-footers').checked,
-                include_page_breaks: document.getElementById('pref-page-breaks').checked,
-                include_page_numbers: document.getElementById('pref-page-numbers').checked,
-                smooth_boundaries: document.getElementById('pref-smooth-boundaries').checked,
-            };
-            const sel = document.querySelector('input[name="ocr-model"]:checked');
-            const model = sel ? sel.value : 'gemini-3-flash-preview';
-            const pageStart = parseInt(document.getElementById('page-start').value);
-            const pageEnd = parseInt(document.getElementById('page-end').value);
-            fetch('/api/jobs/' + pendingJobId + '/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ preferences, model, page_start: pageStart - 1, page_end: pageEnd })
-            }).then(() => { closeModal(); refreshJobs(); });
-        }
-
-        // === Library sidebar ===
-        function loadLibrary() {
-            fetch('/api/library').then(r => r.json()).then(data => {
-                const items = data.items || [];
-                const total = items.length;
-                const complete = items.filter(i => i.status === 'complete').length;
-                document.getElementById('lib-stats').innerHTML =
-                    `<span><strong>${total}</strong> docs</span><span><strong>${complete}</strong> done</span>`;
-                const body = document.getElementById('lib-body');
-                if (items.length === 0) {
-                    body.innerHTML = '<div class="lib-empty">No documents yet</div>';
-                    return;
-                }
-                body.innerHTML = items.map(item => {
-                    const tc = item.type === 'scan' ? 'scan' : 'upload';
-                    const tl = item.type === 'scan' ? 'Scan' : 'Upload';
-                    const sc = item.status || 'pending';
-                    let acts = '';
-                    if (item.has_ocr && item.type === 'scan') acts += `<a href="/session_ocr/${item.id}" target="_blank">DL</a>`;
-                    else if (item.has_ocr && item.type === 'upload') acts += `<a href="/api/jobs/${item.id}/download" target="_blank">DL</a>`;
-                    return `<div class="lib-item">
-                        <div class="lib-item-title" title="${item.title}">${item.title}</div>
-                        <div class="lib-item-meta">
-                            <span class="lib-badge ${tc}">${tl}</span>
-                            <span>${item.pages}p</span>
-                            <span><span class="lib-dot ${sc}"></span>${sc}</span>
-                            <span class="lib-actions">${acts}</span>
-                        </div>
-                    </div>`;
-                }).join('');
-            });
-        }
-
-        // Initial load + polling
-        refreshJobs();
-        loadLibrary();
-        setInterval(refreshJobs, 2000);
-        setInterval(loadLibrary, 10000);
-    </script>
-</body>
-</html>
-'''
-
-
-UPLOAD_PAGE = None  # Replaced by UNIFIED_PAGE
-
-BROWSER_CAMERA_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Camera Scan — Doodle Scanner</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --text-primary: #1c1c1d;
-            --text-secondary: #464649;
-            --text-tertiary: #78787c;
-            --text-interactive: #434fcf;
-            --page-bg: #fafafb;
-            --container-bg: #ffffff;
-            --container-highlight: #f2f2f3;
-            --container-interactive: #eef2ff;
-            --divider-subtle: #e4e4e5;
-            --divider-faint: #f2f2f3;
-            --accent: #434fcf;
-            --accent-soft: #eef2ff;
-            --accent-hover: #5b67e8;
-            --success: #268f4f;
-            --success-bg: #e8f6ec;
-            --error: #e20314;
-            --error-bg: #ffedeb;
-            --warning: #f3c305;
-            --warning-bg: #fcf2d4;
-            --radius-m: 8px;
-            --radius-l: 12px;
-            --radius-xl: 16px;
-            --shadow-1: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px -1px rgba(0,0,0,0.06);
-            --shadow-2: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.06);
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            font-feature-settings: "ss01", "cv01", "cv11";
-            background: var(--page-bg);
-            color: var(--text-primary);
-            min-height: 100vh;
-            letter-spacing: -0.23px;
-        }
-        .container {
-            max-width: 720px;
-            margin: 0 auto;
-            padding: 24px 20px;
-        }
-        .back-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            color: var(--text-interactive);
-            text-decoration: none;
-            margin-bottom: 16px;
-            font-weight: 500;
-            font-size: 14px;
-        }
-        .back-link:hover { text-decoration: underline; }
-        h1 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 4px;
-        }
-        .subtitle { color: var(--text-tertiary); font-size: 14px; margin-bottom: 24px; }
-        .scanner-frame {
-            background: var(--container-bg);
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-xl);
-            overflow: hidden;
-            box-shadow: var(--shadow-2);
-        }
-        .camera-area {
-            background: #1a1a1a;
-            position: relative;
-        }
-        #camera-video {
-            width: 100%;
-            display: block;
-            transform: scaleX(1);
-        }
-        .status-bar {
-            position: absolute;
-            bottom: 0; left: 0; right: 0;
-            background: rgba(0,0,0,0.8);
-            padding: 12px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .status-text {
-            color: #888;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .status-text.scanning { color: #4ade80; }
-        .status-text.turning { color: #fbbf24; }
-        .status-text.processing { color: #60a5fa; }
-        .status-text.error { color: #f87171; }
-        .page-count {
-            color: white;
-            font-size: 20px;
-            font-weight: 700;
-            font-family: 'SF Mono', ui-monospace, monospace;
-        }
-        .motion-bar {
-            position: absolute;
-            top: 16px; right: 16px;
-            width: 4px; height: 60px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 2px;
-            overflow: hidden;
-        }
-        .motion-level {
-            position: absolute;
-            bottom: 0; width: 100%;
-            background: #4ade80;
-            border-radius: 2px;
-            transition: height 0.2s;
-        }
-        .motion-level.high { background: #fbbf24; }
-        .controls-area {
-            padding: 24px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-        }
-        .main-button {
-            width: 100%;
-            max-width: 320px;
-            padding: 14px 28px;
-            font-size: 15px;
-            font-weight: 600;
-            border: none;
-            border-radius: var(--radius-m);
-            cursor: pointer;
-            transition: all 0.15s;
-            font-family: 'Inter', sans-serif;
-            box-shadow: var(--shadow-1);
-        }
-        .main-button:hover:not(:disabled) {
-            box-shadow: var(--shadow-2);
-            transform: translateY(-1px);
-        }
-        .main-button:active:not(:disabled) {
-            transform: translateY(0);
-            box-shadow: none;
-        }
-        .main-button:disabled { cursor: wait; opacity: 0.6; }
-        .btn-start { background: var(--accent); color: white; }
-        .btn-start:hover { background: var(--accent-hover); }
-        .btn-stop { background: var(--error); color: white; }
-        .btn-processing { background: var(--text-tertiary); color: white; }
-        .btn-done { background: var(--success); color: white; }
-        .secondary-actions {
-            display: flex;
-            gap: 16px;
-            font-size: 14px;
-        }
-        .secondary-actions a {
-            color: var(--text-tertiary);
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .secondary-actions a:hover { color: var(--accent); }
-        .photo-upload-label {
-            color: var(--text-interactive);
-            cursor: pointer;
-            font-weight: 500;
-            font-size: 14px;
-        }
-        .photo-upload-label:hover { text-decoration: underline; }
-        .pdf-ready-panel {
-            display: none;
-            padding: 24px;
-            text-align: center;
-            background: var(--container-highlight);
-            border-top: 1px solid var(--divider-subtle);
-        }
-        .pdf-ready-panel.visible { display: block; }
-        .pdf-ready-icon { font-size: 36px; margin-bottom: 8px; }
-        .pdf-ready-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
-        .pdf-ready-meta { color: var(--text-tertiary); font-size: 13px; margin-bottom: 16px; }
-        .pdf-ready-actions { display: flex; gap: 10px; justify-content: center; }
-        .settings-panel {
-            display: none;
-            background: var(--container-highlight);
-            padding: 20px 24px;
-            border-top: 1px solid var(--divider-subtle);
-        }
-        .settings-panel.visible { display: block; }
-        .settings-panel h3 {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: var(--text-secondary);
-        }
-        .setting-row {
-            display: flex;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-        .setting-row label { width: 120px; font-size: 13px; }
-        .setting-row input[type="range"] {
-            flex: 1; margin: 0 12px;
-            accent-color: var(--accent);
-        }
-        .setting-row .value {
-            width: 40px; font-size: 13px;
-            font-weight: 600; text-align: right;
-        }
-        .slider-hints {
-            display: flex;
-            justify-content: space-between;
-            margin: -4px 0 8px 132px;
-            font-size: 11px;
-            color: var(--text-tertiary);
-            padding-right: 52px;
-        }
-        .results-panel {
-            display: none;
-            padding: 24px;
-        }
-        .results-panel.visible { display: block; }
-        .results-header {
-            text-align: center;
-            margin-bottom: 16px;
-        }
-        .results-icon {
-            width: 48px; height: 48px;
-            border-radius: 50%;
-            background: var(--success-bg);
-            color: var(--success);
-            font-size: 24px;
-            line-height: 48px;
-            margin: 0 auto 12px;
-        }
-        .results-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
-        .results-meta { color: var(--text-tertiary); font-size: 14px; margin-bottom: 16px; }
-        .results-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
-        .results-btn {
-            padding: 8px 16px;
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-m);
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            background: var(--container-bg);
-            text-decoration: none;
-            color: var(--text-primary);
-            transition: all 0.15s;
-        }
-        .results-btn:hover { background: var(--container-highlight); }
-        .results-btn.primary {
-            background: var(--accent); color: white; border-color: var(--accent);
-        }
-        .results-btn.primary:hover { background: var(--accent-hover); }
-        .preview-toggle {
-            display: flex;
-            gap: 0;
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-m);
-            overflow: hidden;
-            margin-bottom: 12px;
-        }
-        .preview-toggle button {
-            flex: 1;
-            padding: 8px;
-            border: none;
-            background: var(--container-bg);
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            color: var(--text-tertiary);
-        }
-        .preview-toggle button.active {
-            background: var(--accent);
-            color: white;
-        }
-        .preview-container {
-            background: var(--container-bg);
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-m);
-            max-height: 400px;
-            overflow-y: auto;
-            text-align: left;
-        }
-        .preview-container pre {
-            padding: 16px;
-            font-size: 12px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-family: 'SF Mono', ui-monospace, monospace;
-            margin: 0;
-        }
-        .preview-container .rendered {
-            padding: 20px;
-            font-size: 14px;
-            line-height: 1.6;
-        }
-        .preview-container .rendered h1 { font-size: 24px; margin: 16px 0 8px; font-weight: 700; }
-        .preview-container .rendered h2 { font-size: 20px; margin: 14px 0 6px; font-weight: 600; }
-        .preview-container .rendered h3 { font-size: 16px; margin: 12px 0 4px; font-weight: 600; }
-        .preview-container .rendered p { margin: 0 0 10px; }
-        .preview-container .rendered blockquote {
-            border-left: 3px solid var(--divider-subtle);
-            padding-left: 12px;
-            color: var(--text-secondary);
-            margin: 8px 0;
-        }
-        #capture-flash {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(79, 70, 229, 0.3);
-            pointer-events: none;
-            z-index: 1000;
-        }
-        .bounding-box-overlay {
-            position: absolute;
-            border: 2px dashed rgba(79, 70, 229, 0.7);
-            background: transparent;
-            pointer-events: none;
-            z-index: 5;
-            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
-        }
-        .bounding-box-label {
-            position: absolute;
-            top: -22px;
-            left: 0;
-            font-size: 11px;
-            color: rgba(79, 70, 229, 0.9);
-            background: rgba(255,255,255,0.85);
-            padding: 1px 6px;
-            border-radius: 3px;
-            font-weight: 500;
-        }
-        .preset-buttons {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin-top: 4px;
-        }
-        .preset-btn {
-            padding: 4px 10px;
-            border: 1px solid var(--divider-subtle);
-            border-radius: var(--radius-m);
-            font-size: 12px;
-            cursor: pointer;
-            background: var(--container-bg);
-            transition: all 0.1s;
-        }
-        .preset-btn:hover { border-color: var(--accent); }
-        .preset-btn.active {
-            background: var(--accent);
-            color: white;
-            border-color: var(--accent);
-        }
-        .image-size-badge {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            font-size: 11px;
-            color: white;
-            background: rgba(0,0,0,0.6);
-            padding: 2px 8px;
-            border-radius: 3px;
-            z-index: 6;
-            font-family: monospace;
-        }
-        .camera-error {
-            padding: 40px 20px;
-            text-align: center;
-            color: var(--text-secondary);
-            line-height: 1.5;
-        }
-        .camera-error h2 { margin-bottom: 12px; color: var(--error); font-weight: 600; }
-        .camera-error p { margin-bottom: 8px; font-size: 14px; }
-        .camera-error code {
-            background: var(--container-highlight);
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 12px;
-        }
-        #session-name, #output-dir { display: none; }
-        .manual-capture-btn {
-            position: absolute;
-            bottom: 60px; left: 50%;
-            transform: translateX(-50%);
-            width: 56px; height: 56px;
-            border-radius: 50%;
-            border: 3px solid white;
-            background: rgba(255,255,255,0.2);
-            cursor: pointer;
-            z-index: 10;
-            transition: all 0.15s;
-        }
-        .manual-capture-btn:hover { background: rgba(255,255,255,0.4); }
-        .manual-capture-btn:active { transform: translateX(-50%) scale(0.9); }
-        .manual-capture-btn.hidden { display: none; }
-    </style>
-</head>
-<body>
-    <div id="capture-flash"></div>
-
-    <span id="session-name">{{ session_name }}</span>
-    <span id="output-dir">{{ output_dir }}</span>
-
-    <div class="container">
-        <a href="/" class="back-link">← Back to Doodle Scanner</a>
-        <h1>Camera Scan</h1>
-        <p class="subtitle">Position camera over your book and flip pages</p>
-
-        <div class="scanner-frame">
-            <div class="camera-area" id="camera-area" style="position:relative">
-                <video id="camera-video" autoplay playsinline muted></video>
-                <canvas id="detect-canvas" style="display:none"></canvas>
-                <canvas id="capture-canvas" style="display:none"></canvas>
-
-                <div class="bounding-box-overlay" id="bounding-box" style="display:none">
-                    <span class="bounding-box-label" id="bounding-box-label"></span>
-                </div>
-                <div class="image-size-badge" id="image-size-badge" style="display:none"></div>
-
-                <button class="manual-capture-btn hidden" id="manual-capture-btn"
-                        onclick="manualCapture()" title="Manual capture"></button>
-
-                <div class="motion-bar">
-                    <div class="motion-level" id="motion-level" style="height: 20%"></div>
-                </div>
-
-                <div class="status-bar">
-                    <span class="status-text" id="status-text">Requesting camera...</span>
-                    <span class="page-count" id="page-count">0 pages</span>
-                </div>
-            </div>
-
-            <div class="controls-area" id="controls-area">
-                <button class="main-button btn-start" id="main-button" onclick="handleMainButton()" disabled>
-                    Start Scanning
-                </button>
-                <div class="secondary-actions">
-                    <label class="photo-upload-label" id="photo-upload-label">
-                        <input type="file" accept="image/*" capture="environment" multiple
-                               id="photo-upload" onchange="handlePhotoUpload(this.files)" style="display:none">
-                        📸 Take Photo / Upload Images
-                    </label>
-                    <a href="#" onclick="toggleSettings(); return false;">Settings</a>
-                    <a href="#" onclick="newSession(); return false;">+ New Session</a>
-                </div>
-            </div>
-
-            <div class="pdf-ready-panel" id="pdf-ready-panel">
-                <div class="pdf-ready-icon">📄</div>
-                <div class="pdf-ready-title" id="pdf-ready-title">PDF Compiled</div>
-                <div class="pdf-ready-meta" id="pdf-ready-meta">Ready to download or run OCR</div>
-                <div class="pdf-ready-actions">
-                    <a class="results-btn primary" id="pdf-download-link" href="#" download>Download PDF</a>
-                    <button class="results-btn" onclick="scanMore()">New Scan</button>
-                </div>
-            </div>
-
-            <div class="settings-panel visible" id="settings-panel">
-                <h3>Settings</h3>
-                <div class="setting-row">
-                    <label>Sensitivity</label>
-                    <input type="range" id="sensitivity" min="1" max="10" value="5"
-                           oninput="updateSensitivity(this.value)">
-                    <span class="value" id="sensitivity-val">5</span>
-                </div>
-                <div class="slider-hints">
-                    <span>Thick pages / slow turns</span>
-                    <span>Thin pages / quick turns</span>
-                </div>
-                <div class="setting-row">
-                    <label>Capture Delay</label>
-                    <input type="range" id="stability-delay" min="0.3" max="3" step="0.1" value="1.0"
-                           oninput="updateDelay(this.value)">
-                    <span class="value" id="stability-delay-val">1.0s</span>
-                </div>
-                <div class="slider-hints">
-                    <span>Snap faster</span>
-                    <span>More settling time</span>
-                </div>
-                <div class="setting-row" style="flex-direction:column; align-items:flex-start">
-                    <label style="width:auto; margin-bottom:6px">Book Size Guide</label>
-                    <div class="preset-buttons">
-                        <button class="preset-btn active" onclick="setBookPreset('none')">None</button>
-                        <button class="preset-btn" onclick="setBookPreset('openbook')">Open Book</button>
-                        <button class="preset-btn" onclick="setBookPreset('paperback')">Paperback</button>
-                        <button class="preset-btn" onclick="setBookPreset('trade')">Trade</button>
-                        <button class="preset-btn" onclick="setBookPreset('letter')">Letter</button>
-                        <button class="preset-btn" onclick="setBookPreset('square')">Square</button>
-                    </div>
-                </div>
-                <div class="setting-row" style="margin-top: 8px">
-                    <label style="width: auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                        <input type="checkbox" id="pref-page-numbers">
-                        <span style="font-size:13px">Preserve page numbers</span>
-                        <span style="font-size:11px; color:var(--text-tertiary)">(hidden comments in markdown)</span>
-                    </label>
-                </div>
-                <div class="setting-row" style="flex-direction:column; align-items:flex-start">
-                    <label style="width:auto; margin-bottom:6px">OCR Models (multi-select for comparison)</label>
-                    <div style="display:flex; flex-direction:column; gap:6px; font-size:13px">
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="checkbox" class="model-checkbox" value="gemini-3-flash-preview" checked>
-                            <span>Gemini 3 Flash Preview <span style="color:var(--text-tertiary)">(default, best accuracy)</span></span>
-                        </label>
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="checkbox" class="model-checkbox" value="gemini-2.0-flash">
-                            <span>Gemini 2.0 Flash <span style="color:var(--text-tertiary)">(faster, good quality)</span></span>
-                        </label>
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="checkbox" class="model-checkbox" value="gemini-2.5-flash-lite">
-                            <span>Gemini 2.5 Flash Lite <span style="color:var(--text-tertiary)">(balanced, lighter)</span></span>
-                        </label>
-                        <label style="width:auto; display:flex; align-items:center; gap:8px; cursor:pointer">
-                            <input type="checkbox" class="model-checkbox" value="gemini-3.1-pro-preview">
-                            <span>Gemini 3.1 Pro <span style="color:var(--text-tertiary)">(highest quality, 5x cost)</span></span>
-                        </label>
-                    </div>
-                </div>
-            </div>
-
-            <div class="results-panel" id="results-panel">
-                <div class="results-header">
-                    <div class="results-icon">&#10003;</div>
-                    <div class="results-title" id="results-title">OCR Complete</div>
-                    <div class="results-meta" id="results-meta">0 pages processed</div>
-                </div>
-                <div class="results-actions">
-                    <button class="results-btn" onclick="scanMore()">Scan More</button>
-                    <a class="results-btn primary" id="download-link" href="#" download>Download .md</a>
-                    <a class="results-btn" id="download-docx" href="#" target="_blank">Export .docx</a>
-                    <button class="results-btn" id="download-pdf" onclick="downloadScannedPDF()">Scanned PDF</button>
-                </div>
-                <div class="preview-toggle">
-                    <button class="active" onclick="setPreviewMode('rendered', this)">Preview</button>
-                    <button onclick="setPreviewMode('raw', this)">Raw Markdown</button>
-                </div>
-                <div class="preview-container" id="preview-container">
-                    <div class="rendered" id="preview-rendered">Loading preview...</div>
-                    <pre id="preview-raw" style="display:none"></pre>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-    // ===== State =====
-    let appState = 'idle';
-    let captureCount = 0;
-    let ocrOutputUrl = null;
-    let pdfPageCount = 0;
-    let cameraStream = null;
-    let detecting = false;
-    let animFrameId = null;
-
-    // Motion detection state (mirrors Python PageSnapDetector)
-    const STATES = { IDLE: 0, TURNING: 1, STABILIZING: 2, CAPTURING: 3, COOLDOWN: 4 };
-    const STATE_NAMES = ['Monitoring...', 'Page turning...', 'Stabilizing...', 'Captured!', 'Cooldown...'];
-    let motionState = STATES.IDLE;
-    let prevGray = null;
-    let stabilityStart = null;
-    let cooldownStart = null;
-    let lastDelta = 0;
-
-    // Config (mirrors Python Config)
-    let config = {
-        motionThreshold: 3.0,
-        stabilityThreshold: 1.0,
-        stabilityDelay: 1.0,
-        cooldownPeriod: 1.0,
-        detectionScale: 0.25,
-    };
-
-    const video = document.getElementById('camera-video');
-    const detectCanvas = document.getElementById('detect-canvas');
-    const captureCanvas = document.getElementById('capture-canvas');
-    const detectCtx = detectCanvas.getContext('2d', { willReadFrequently: true });
-    const captureCtx = captureCanvas.getContext('2d');
-
-    // ===== Camera Setup =====
-    async function startCamera() {
-        const statusText = document.getElementById('status-text');
-        const area = document.getElementById('camera-area');
-
-        // Pre-check: getUserMedia requires HTTPS (or localhost)
-        const isSecure = location.protocol === 'https:' ||
-                         location.hostname === 'localhost' ||
-                         location.hostname === '127.0.0.1';
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            area.innerHTML = '<div class="camera-error">' +
-                '<h2>Camera Not Available</h2>' +
-                (isSecure
-                    ? '<p>Your browser does not support camera access.</p>'
-                    : '<p>Camera requires <strong>HTTPS</strong> or <strong>localhost</strong>.</p>' +
-                      '<p style="margin-top:8px">Currently on: <code>' + location.origin + '</code></p>' +
-                      '<p style="margin-top:8px;font-size:13px;color:var(--text-tertiary)">Run locally with: <code>python web_app.py</code> then open <code>http://localhost:5001/camera</code></p>') +
-                '</div>';
-            return;
-        }
-
-        statusText.textContent = 'Requesting camera access...';
-
-        // Timeout: if getUserMedia hangs for 5 seconds, show help
-        let cameraTimedOut = false;
-        const cameraTimeout = setTimeout(() => {
-            cameraTimedOut = true;
-            statusText.textContent = 'Camera not responding — use photo upload below';
-            statusText.className = 'status-text error';
-            // Don't replace camera area — just show the message. User can still use photo upload button.
-        }, 5000);
-
-        try {
-            const constraints = {
-                video: {
-                    facingMode: 'environment',
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
-                }
-            };
-            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            clearTimeout(cameraTimeout);
-
-            video.srcObject = cameraStream;
-            await video.play();
-
-            // Set capture canvas to full video resolution
-            video.addEventListener('loadedmetadata', () => {
-                captureCanvas.width = video.videoWidth;
-                captureCanvas.height = video.videoHeight;
-                detectCanvas.width = Math.round(video.videoWidth * config.detectionScale);
-                detectCanvas.height = Math.round(video.videoHeight * config.detectionScale);
-                showImageSize();
-                updateBoundingBox();
-            });
-
-            statusText.textContent = 'Ready to scan';
-            statusText.className = 'status-text scanning';
-            document.getElementById('main-button').disabled = false;
-        } catch (err) {
-            clearTimeout(cameraTimeout);
-            console.error('Camera error:', err.name, err.message);
-
-            let hint = 'Camera unavailable';
-            if (err.name === 'NotAllowedError') {
-                hint = 'Camera denied — check browser permissions';
-            } else if (err.name === 'NotFoundError') {
-                hint = 'No camera found on this device';
-            } else if (err.name === 'NotReadableError') {
-                hint = 'Camera in use by another app';
-            } else {
-                hint = err.message || 'Camera error';
-            }
-
-            statusText.textContent = hint + ' — use photo upload below';
-            statusText.className = 'status-text error';
-            // Don't block the page — photo upload still works
-        }
+# =============================================================================
+# Library
+# =============================================================================
+
+def get_library(output_dir: str) -> dict:
+    scans = []
+    idx_path = os.path.join(output_dir, "_index.json")
+    if os.path.exists(idx_path):
+        try:
+            with open(idx_path) as f:
+                scans = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    categories = {}
+    for s in scans:
+        c = s.get('category', 'misc')
+        categories[c] = categories.get(c, 0) + 1
+    return {
+        'scans': scans, 'books': book_ocr.list_jobs(), 'categories': categories,
+        'total_docs': len(scans), 'total_pages': sum(s.get('page_count', 0) for s in scans),
+        'total_cost': round(sum(s.get('cost', 0) for s in scans), 4),
     }
 
-    // ===== Motion Detection (runs in requestAnimationFrame) =====
-    function toGrayscale(imageData) {
-        const data = imageData.data;
-        const gray = new Float32Array(imageData.width * imageData.height);
-        for (let i = 0; i < gray.length; i++) {
-            const j = i * 4;
-            gray[i] = data[j] * 0.299 + data[j+1] * 0.587 + data[j+2] * 0.114;
-        }
-        return gray;
-    }
 
-    function meanAbsDiff(a, b) {
-        let sum = 0;
-        for (let i = 0; i < a.length; i++) {
-            sum += Math.abs(a[i] - b[i]);
-        }
-        return sum / a.length;
-    }
+# =============================================================================
+# Global State
+# =============================================================================
 
-    function detectionLoop() {
-        if (!detecting) return;
+scan_session: Optional[ScanSession] = None
+book_ocr = BookOCRManager()
 
-        // Draw scaled-down frame for detection
-        detectCtx.drawImage(video, 0, 0, detectCanvas.width, detectCanvas.height);
-        const imageData = detectCtx.getImageData(0, 0, detectCanvas.width, detectCanvas.height);
-        const gray = toGrayscale(imageData);
 
-        if (prevGray && prevGray.length === gray.length) {
-            lastDelta = meanAbsDiff(gray, prevGray);
-            const now = performance.now() / 1000;
-
-            // State machine (mirrors Python PageSnapDetector.process_frame)
-            let shouldCapture = false;
-
-            if (motionState === STATES.IDLE) {
-                if (lastDelta > config.motionThreshold) {
-                    motionState = STATES.TURNING;
-                }
-            } else if (motionState === STATES.TURNING) {
-                if (lastDelta < config.stabilityThreshold) {
-                    motionState = STATES.STABILIZING;
-                    stabilityStart = now;
-                }
-            } else if (motionState === STATES.STABILIZING) {
-                if (lastDelta > config.stabilityThreshold) {
-                    motionState = STATES.TURNING;
-                } else if (stabilityStart && (now - stabilityStart) >= config.stabilityDelay) {
-                    motionState = STATES.CAPTURING;
-                    shouldCapture = true;
-                    cooldownStart = now;
-                }
-            } else if (motionState === STATES.CAPTURING) {
-                motionState = STATES.COOLDOWN;
-            } else if (motionState === STATES.COOLDOWN) {
-                if (cooldownStart && (now - cooldownStart) >= config.cooldownPeriod) {
-                    motionState = STATES.IDLE;
-                }
-            }
-
-            if (shouldCapture) {
-                captureFrame();
-            }
-
-            // Update UI
-            updateMotionUI();
-        }
-
-        prevGray = gray;
-        animFrameId = requestAnimationFrame(detectionLoop);
-    }
-
-    function updateMotionUI() {
-        const motionLevel = document.getElementById('motion-level');
-        const normalized = Math.min(100, (lastDelta / 10) * 100);
-        motionLevel.style.height = normalized + '%';
-        motionLevel.classList.toggle('high', lastDelta > config.motionThreshold);
-
-        const statusText = document.getElementById('status-text');
-        if (appState === 'scanning') {
-            if (motionState === STATES.TURNING) {
-                statusText.textContent = 'Page turning...';
-                statusText.className = 'status-text turning';
-            } else if (motionState === STATES.STABILIZING) {
-                statusText.textContent = 'Stabilizing...';
-                statusText.className = 'status-text turning';
-            } else if (motionState === STATES.CAPTURING) {
-                statusText.textContent = 'Captured!';
-                statusText.className = 'status-text scanning';
-            } else {
-                statusText.textContent = 'Scanning...';
-                statusText.className = 'status-text scanning';
-            }
-        }
-    }
-
-    // ===== Capture =====
-    function captureFrame() {
-        const preset = BOOK_PRESETS[activePreset];
-
-        if (preset && preset.ratio) {
-            // Crop to bounding box region
-            const area = document.getElementById('camera-area');
-            const areaW = area.offsetWidth;
-            const areaH = area.offsetHeight;
-            const scaleX = video.videoWidth / areaW;
-            const scaleY = video.videoHeight / areaH;
-
-            // Recalculate box in video-pixel coordinates
-            const padding = 0.08;
-            const availW = areaW * (1 - 2 * padding);
-            const availH = areaH * (1 - 2 * padding);
-            let boxW, boxH;
-            if (availW / availH > preset.ratio) {
-                boxH = availH; boxW = boxH * preset.ratio;
-            } else {
-                boxW = availW; boxH = boxW / preset.ratio;
-            }
-            const boxLeft = (areaW - boxW) / 2;
-            const boxTop = (areaH - boxH) / 2;
-
-            // Source rect in video pixels
-            const sx = boxLeft * scaleX;
-            const sy = boxTop * scaleY;
-            const sw = boxW * scaleX;
-            const sh = boxH * scaleY;
-
-            // Size capture canvas to cropped region
-            captureCanvas.width = Math.round(sw);
-            captureCanvas.height = Math.round(sh);
-            captureCtx.drawImage(video, sx, sy, sw, sh, 0, 0, captureCanvas.width, captureCanvas.height);
-        } else {
-            // No bounding box — capture full frame
-            captureCanvas.width = video.videoWidth;
-            captureCanvas.height = video.videoHeight;
-            captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
-        }
-
-        const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.90);
-
-        // Flash effect
-        const flash = document.getElementById('capture-flash');
-        flash.style.display = 'block';
-        setTimeout(() => flash.style.display = 'none', 200);
-
-        // Send to server
-        fetch('/api/capture', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataUrl })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.ok) {
-                captureCount = data.capture_count;
-                document.getElementById('page-count').textContent =
-                    captureCount + ' page' + (captureCount !== 1 ? 's' : '');
-            }
-        })
-        .catch(err => console.error('Capture failed:', err));
-    }
-
-    function manualCapture() {
-        captureFrame();
-    }
-
-    // ===== Photo Upload Fallback =====
-    async function handlePhotoUpload(files) {
-        if (!files || files.length === 0) return;
-        const statusText = document.getElementById('status-text');
-        statusText.textContent = 'Uploading ' + files.length + ' photo(s)...';
-        statusText.className = 'status-text processing';
-
-        for (const file of files) {
-            const reader = new FileReader();
-            const dataUrl = await new Promise((resolve) => {
-                reader.onload = () => resolve(reader.result);
-                reader.readAsDataURL(file);
-            });
-
-            const res = await fetch('/api/capture', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: dataUrl })
-            });
-            const data = await res.json();
-            if (data.ok) {
-                captureCount = data.capture_count;
-                document.getElementById('page-count').textContent =
-                    captureCount + ' page' + (captureCount !== 1 ? 's' : '');
-            }
-        }
-
-        statusText.textContent = captureCount + ' pages captured — compiling PDF...';
-        statusText.className = 'status-text processing';
-
-        // Reset file input so same files can be re-selected
-        document.getElementById('photo-upload').value = '';
-
-        // Go straight to PDF compilation
-        compilePDF();
-    }
-
-    // ===== App State Machine =====
-    function handleMainButton() {
-        switch (appState) {
-            case 'idle': startScanning(); break;
-            case 'scanning': stopAndProcess(); break;
-            case 'pdf_ready': startOCR(); break;
-            case 'done': scanMore(); break;
-        }
-    }
-
-    function startOCR() {
-        setAppState('processing');
-        runOCR();
-    }
-
-    function startScanning() {
-        detecting = true;
-        motionState = STATES.IDLE;
-        prevGray = null;
-        stabilityStart = null;
-        cooldownStart = null;
-        setAppState('scanning');
-        document.getElementById('manual-capture-btn').classList.remove('hidden');
-        animFrameId = requestAnimationFrame(detectionLoop);
-    }
-
-    function stopAndProcess() {
-        detecting = false;
-        document.getElementById('manual-capture-btn').classList.add('hidden');
-        if (animFrameId) cancelAnimationFrame(animFrameId);
-
-        if (captureCount > 0) {
-            compilePDF();
-        } else {
-            setAppState('idle');
-        }
-    }
-
-    function compilePDF() {
-        const sessionName = document.getElementById('session-name').textContent;
-        setAppState('compiling');
-
-        fetch('/export_pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: sessionName })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) {
-                document.getElementById('status-text').textContent = 'PDF Error: ' + data.error;
-                document.getElementById('status-text').className = 'status-text error';
-                setAppState('idle');
-            } else {
-                pdfPageCount = data.page_count;
-                setAppState('pdf_ready');
-            }
-        })
-        .catch(() => {
-            document.getElementById('status-text').textContent = 'PDF compilation failed';
-            document.getElementById('status-text').className = 'status-text error';
-            setAppState('idle');
-        });
-    }
-
-    function getSelectedModels() {
-        const checkboxes = document.querySelectorAll('.model-checkbox:checked');
-        return Array.from(checkboxes).map(cb => cb.value);
-    }
-
-    function runOCR() {
-        const sessionName = document.getElementById('session-name').textContent;
-        const models = getSelectedModels();
-        if (models.length === 0) {
-            document.getElementById('status-text').textContent = 'Select at least one model';
-            document.getElementById('status-text').className = 'status-text error';
-            setAppState('idle');
-            return;
-        }
-        const preferences = {
-            include_page_numbers: document.getElementById('pref-page-numbers')?.checked || false,
-        };
-        fetch('/run_ocr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: sessionName, models: models, preferences: preferences })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) {
-                document.getElementById('status-text').textContent = 'OCR Error: ' + data.error;
-                document.getElementById('status-text').className = 'status-text error';
-                setAppState('idle');
-            }
-            // OCR started - polling will track progress
-        })
-        .catch(() => {
-            document.getElementById('status-text').textContent = 'OCR failed';
-            document.getElementById('status-text').className = 'status-text error';
-            setAppState('idle');
-        });
-    }
-
-    function scanMore() {
-        fetch('/new_session', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('session-name').textContent = data.session_name;
-                document.getElementById('output-dir').textContent = data.output_dir;
-                captureCount = 0;
-                ocrOutputUrl = null;
-                document.getElementById('page-count').textContent = '0 pages';
-                setAppState('idle');
-            });
-    }
-
-    // ===== Preview & Export =====
-    let rawMarkdown = '';
-
-    function loadPreview(url) {
-        fetch(url)
-            .then(r => r.text())
-            .then(md => {
-                rawMarkdown = md;
-                document.getElementById('preview-raw').textContent = md;
-                document.getElementById('preview-rendered').innerHTML = renderMarkdown(md);
-            });
-    }
-
-    function renderMarkdown(md) {
-        // Plain text preview — regex-in-template is a footgun
-        var el = document.createElement('pre');
-        el.style.cssText = 'white-space:pre-wrap;font-size:13px;line-height:1.6;font-family:Georgia,serif;margin:0;padding:16px';
-        el.textContent = md;
-        var wrapper = document.createElement('div');
-        wrapper.appendChild(el);
-        return wrapper.innerHTML;
-    }
-
-    function setPreviewMode(mode, btn) {
-        document.querySelectorAll('.preview-toggle button').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        document.getElementById('preview-rendered').style.display = mode === 'rendered' ? 'block' : 'none';
-        document.getElementById('preview-raw').style.display = mode === 'raw' ? 'block' : 'none';
-    }
-
-    // exportDocx is now handled via <a> tag with href set in setAppState('done')
-
-    function newSession() {
-        if (detecting) {
-            detecting = false;
-            if (animFrameId) cancelAnimationFrame(animFrameId);
-            document.getElementById('manual-capture-btn').classList.add('hidden');
-        }
-        scanMore();
-    }
-
-    function setAppState(state) {
-        appState = state;
-        const btn = document.getElementById('main-button');
-        const controlsArea = document.getElementById('controls-area');
-        const resultsPanel = document.getElementById('results-panel');
-        const statusText = document.getElementById('status-text');
-
-        controlsArea.style.display = 'flex';
-        resultsPanel.classList.remove('visible');
-        btn.disabled = false;
-
-        // Hide pdf-ready panel by default
-        const pdfPanel = document.getElementById('pdf-ready-panel');
-        if (pdfPanel) pdfPanel.classList.remove('visible');
-
-        switch (state) {
-            case 'idle':
-                btn.className = 'main-button btn-start';
-                btn.textContent = 'Start Scanning';
-                statusText.textContent = 'Ready to scan';
-                statusText.className = 'status-text';
-                break;
-            case 'scanning':
-                btn.className = 'main-button btn-stop';
-                btn.textContent = 'Stop & Compile PDF';
-                statusText.textContent = 'Scanning...';
-                statusText.className = 'status-text scanning';
-                break;
-            case 'compiling':
-                btn.className = 'main-button btn-processing';
-                btn.textContent = 'Compiling PDF...';
-                btn.disabled = true;
-                statusText.textContent = 'Building PDF from ' + captureCount + ' pages...';
-                statusText.className = 'status-text processing';
-                break;
-            case 'pdf_ready': {
-                btn.className = 'main-button btn-start';
-                btn.textContent = 'Run OCR';
-                statusText.textContent = 'PDF ready — ' + pdfPageCount + ' pages';
-                statusText.className = 'status-text scanning';
-                pdfPanel.classList.add('visible');
-                const sessionName = document.getElementById('session-name').textContent;
-                document.getElementById('pdf-download-link').href = '/download_pdf/' + sessionName;
-                document.getElementById('pdf-ready-meta').textContent =
-                    pdfPageCount + ' pages — download or run OCR';
-                break;
-            }
-            case 'processing':
-                btn.className = 'main-button btn-processing';
-                btn.textContent = 'Processing OCR...';
-                btn.disabled = true;
-                statusText.textContent = 'Running OCR...';
-                statusText.className = 'status-text processing';
-                pdfPanel.classList.remove('visible');
-                break;
-            case 'done':
-                controlsArea.style.display = 'none';
-                resultsPanel.classList.add('visible');
-                statusText.textContent = 'Complete';
-                statusText.className = 'status-text';
-                document.getElementById('results-meta').textContent = captureCount + ' pages processed';
-                if (ocrOutputUrl) {
-                    document.getElementById('download-link').href = ocrOutputUrl;
-                    const sessionName = document.getElementById('session-name').textContent;
-                    document.getElementById('download-docx').href = '/export_docx/' + sessionName;
-                    loadPreview(ocrOutputUrl);
-                }
-                break;
-        }
-    }
-
-    function downloadScannedPDF() {
-        const sessionName = document.getElementById('session-name').textContent;
-        fetch('/export_pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: sessionName })
-        })
-        .then(r => {
-            if (!r.ok) throw new Error('Export failed');
-            return r.blob();
-        })
-        .then(blob => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = sessionName + '_scanned.pdf';
-            a.click();
-            URL.revokeObjectURL(url);
-        })
-        .catch(err => alert('PDF export failed: ' + err.message));
-    }
-
-    // ===== Settings =====
-    function toggleSettings() {
-        document.getElementById('settings-panel').classList.toggle('visible');
-    }
-
-    function updateSensitivity(value) {
-        document.getElementById('sensitivity-val').textContent = value;
-        config.motionThreshold = 11 - value;
-        config.stabilityThreshold = 2.2 - (value * 0.2);
-    }
-
-    function updateDelay(value) {
-        document.getElementById('stability-delay-val').textContent = value + 's';
-        config.stabilityDelay = parseFloat(value);
-    }
-
-    // ===== Book Size Bounding Box =====
-    // Aspect ratios (width:height) for common book formats
-    const BOOK_PRESETS = {
-        none:      { ratio: null, label: '' },
-        openbook:  { ratio: 12 / 9, label: 'Open Book 12\u00d79' },
-        paperback: { ratio: 6 / 9, label: 'Paperback 6\u00d79' },
-        trade:     { ratio: 5.5 / 8.5, label: 'Trade 5.5\u00d78.5' },
-        letter:    { ratio: 8.5 / 11, label: 'Letter 8.5\u00d711' },
-        square:    { ratio: 1, label: 'Square' },
-    };
-    let activePreset = 'none';
-
-    function setBookPreset(name) {
-        activePreset = name;
-        // Update button states
-        document.querySelectorAll('.preset-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.textContent.toLowerCase() === name ||
-                (name === 'none' && btn.textContent === 'None'));
-        });
-        updateBoundingBox();
-    }
-
-    function updateBoundingBox() {
-        const box = document.getElementById('bounding-box');
-        const label = document.getElementById('bounding-box-label');
-        const preset = BOOK_PRESETS[activePreset];
-
-        if (!preset || !preset.ratio) {
-            box.style.display = 'none';
-            return;
-        }
-
-        const video = document.getElementById('camera-video');
-        const area = document.getElementById('camera-area');
-        const areaW = area.offsetWidth;
-        const areaH = area.offsetHeight;
-
-        if (areaW === 0 || areaH === 0) return;
-
-        // Fit the book ratio inside the camera view with 8% padding
-        const padding = 0.08;
-        const availW = areaW * (1 - 2 * padding);
-        const availH = areaH * (1 - 2 * padding);
-
-        let boxW, boxH;
-        if (availW / availH > preset.ratio) {
-            // Height-constrained
-            boxH = availH;
-            boxW = boxH * preset.ratio;
-        } else {
-            // Width-constrained
-            boxW = availW;
-            boxH = boxW / preset.ratio;
-        }
-
-        const left = (areaW - boxW) / 2;
-        const top = (areaH - boxH) / 2;
-
-        box.style.display = 'block';
-        box.style.left = left + 'px';
-        box.style.top = top + 'px';
-        box.style.width = boxW + 'px';
-        box.style.height = boxH + 'px';
-        label.textContent = preset.label;
-    }
-
-    // Update bounding box on resize
-    window.addEventListener('resize', updateBoundingBox);
-
-    // ===== Image Size Badge =====
-    function showImageSize() {
-        const video = document.getElementById('camera-video');
-        const badge = document.getElementById('image-size-badge');
-        if (video.videoWidth && video.videoHeight) {
-            badge.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
-            badge.style.display = 'block';
-        }
-    }
-
-    // ===== OCR Status Polling =====
-    setInterval(() => {
-        if (appState !== 'processing') return;
-        fetch('/status')
-            .then(r => r.json())
-            .then(data => {
-                if (data.ocr) {
-                    if (data.ocr.state === 'running') {
-                        const desc = data.ocr.current_page || 'Processing...';
-                        const total = data.ocr.total || 0;
-                        const completed = data.ocr.completed || 0;
-                        const pct = total > 0 ? Math.round(completed / total * 100) : 0;
-                        document.getElementById('status-text').textContent =
-                            desc + (pct > 0 ? ' (' + pct + '%)' : '');
-                    } else if (data.ocr.state === 'complete') {
-                        ocrOutputUrl = data.ocr.output_url;
-                        setAppState('done');
-                    } else if (data.ocr.state === 'error') {
-                        document.getElementById('status-text').textContent =
-                            'OCR Error: ' + (data.ocr.error || 'Unknown');
-                        document.getElementById('status-text').className = 'status-text error';
-                        setAppState('idle');
-                    } else if (data.ocr.state === 'idle') {
-                        // Server restarted mid-job — reset gracefully
-                        document.getElementById('status-text').textContent =
-                            'Server restarted. Please re-run OCR.';
-                        document.getElementById('status-text').className = 'status-text error';
-                        setAppState('idle');
-                    }
-                }
-            });
-    }, 1000);
-
-    // ===== Init =====
-    startCamera();
-    </script>
-</body>
-</html>
-'''
-
-
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Page Snap — Doodle Reader</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --ink: #1a1a1a;
-            --ink-soft: #3d3d3d;
-            --ink-muted: #6b6b6b;
-            --cream: #faf8f5;
-            --cream-warm: #f5f2ed;
-            --surface: #ffffff;
-            --border: #d4d0c8;
-            --accent: #4f46e5;
-            --accent-soft: #e0e7ff;
-            --success: #16a34a;
-            --error: #dc2626;
-            --warning: #f59e0b;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--cream);
-            color: var(--ink);
-            min-height: 100vh;
-            padding: 24px;
-        }
-        .container { max-width: 900px; margin: 0 auto; }
-
-        .back-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 14px;
-            color: var(--accent);
-            text-decoration: none;
-            margin-bottom: 16px;
-            font-weight: 500;
-        }
-        .back-link:hover { text-decoration: underline; }
-
-        h1 {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 28px;
-            margin-bottom: 8px;
-        }
-        .subtitle { color: var(--ink-muted); margin-bottom: 24px; }
-
-        /* Main scanner frame */
-        .scanner-frame {
-            background: var(--surface);
-            border: 2px solid var(--ink);
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 6px 6px 0 var(--ink);
-        }
-
-        /* Camera area with status overlay */
-        .camera-area {
-            background: #1a1a1a;
-            position: relative;
-        }
-        #video-feed {
-            width: 100%;
-            display: block;
-        }
-
-        /* Status bar overlay on camera */
-        .status-bar {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: rgba(0,0,0,0.8);
-            padding: 12px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .status-text {
-            color: #888;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .status-text.scanning { color: #4ade80; }
-        .status-text.turning { color: #fbbf24; }
-        .status-text.processing { color: #60a5fa; }
-        .status-text.error { color: #f87171; }
-
-        .page-count {
-            color: white;
-            font-size: 20px;
-            font-weight: 700;
-            font-family: 'SF Mono', ui-monospace, monospace;
-        }
-
-        /* Motion indicator - subtle bar */
-        .motion-bar {
-            position: absolute;
-            top: 16px;
-            right: 16px;
-            width: 4px;
-            height: 60px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 2px;
-            overflow: hidden;
-        }
-        .motion-level {
-            position: absolute;
-            bottom: 0;
-            width: 100%;
-            background: #4ade80;
-            border-radius: 2px;
-            transition: height 0.2s;
-        }
-        .motion-level.high { background: #fbbf24; }
-
-        /* Controls area */
-        .controls-area {
-            padding: 24px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .main-button {
-            width: 100%;
-            max-width: 320px;
-            padding: 18px 32px;
-            font-size: 16px;
-            font-weight: 600;
-            border: 2px solid var(--ink);
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.15s;
-            font-family: 'Inter', sans-serif;
-            box-shadow: 3px 3px 0 var(--ink);
-        }
-        .main-button:hover:not(:disabled) {
-            transform: translate(-2px, -2px);
-            box-shadow: 5px 5px 0 var(--ink);
-        }
-        .main-button:active:not(:disabled) {
-            transform: translate(2px, 2px);
-            box-shadow: 1px 1px 0 var(--ink);
-        }
-        .main-button:disabled {
-            cursor: wait;
-            opacity: 0.7;
-        }
-
-        .btn-start { background: var(--accent); color: white; }
-        .btn-stop { background: var(--error); color: white; }
-        .btn-processing { background: var(--ink-muted); color: white; }
-        .btn-done { background: var(--success); color: white; }
-
-        .secondary-actions {
-            display: flex;
-            gap: 16px;
-            font-size: 14px;
-        }
-        .secondary-actions a {
-            color: var(--ink-muted);
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .secondary-actions a:hover { color: var(--accent); }
-
-        /* Settings panel (hidden by default) */
-        .settings-panel {
-            display: none;
-            background: var(--cream-warm);
-            padding: 20px 24px;
-            border-top: 1px solid var(--border);
-        }
-        .settings-panel.visible { display: block; }
-        .settings-panel h3 {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: var(--ink-soft);
-        }
-        .setting-row {
-            display: flex;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-        .setting-row label {
-            width: 120px;
-            font-size: 13px;
-        }
-        .setting-row input[type="range"] {
-            flex: 1;
-            margin: 0 12px;
-            accent-color: var(--accent);
-        }
-        .setting-row select {
-            flex: 1;
-            margin: 0 12px;
-            padding: 6px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            font-size: 13px;
-        }
-        .slider-hints {
-            display: flex;
-            justify-content: space-between;
-            margin: -4px 0 8px 132px;
-            font-size: 11px;
-            color: var(--ink-muted);
-            padding-right: 52px;
-        }
-        .setting-row .value {
-            width: 40px;
-            font-size: 13px;
-            font-weight: 600;
-            text-align: right;
-        }
-
-        /* Results panel */
-        .results-panel {
-            display: none;
-            padding: 24px;
-            text-align: center;
-        }
-        .results-panel.visible { display: block; }
-        .results-icon { font-size: 48px; margin-bottom: 12px; }
-        .results-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
-        .results-meta { color: var(--ink-muted); font-size: 14px; margin-bottom: 20px; }
-        .results-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-        .results-btn {
-            padding: 10px 20px;
-            border: 2px solid var(--border);
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            background: var(--surface);
-        }
-        .results-btn:hover { background: var(--cream); }
-        .results-btn.primary {
-            background: var(--accent);
-            color: white;
-            border-color: var(--accent);
-        }
-        .results-btn.primary:hover { background: var(--accent); opacity: 0.9; }
-
-        /* Capture flash effect */
-        #capture-flash {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(79, 70, 229, 0.3);
-            pointer-events: none;
-            z-index: 1000;
-        }
-        .capture-sound { display: none; }
-
-        /* Hidden data */
-        #session-name, #output-dir { display: none; }
-    </style>
-</head>
-<body>
-    <div id="capture-flash"></div>
-    <audio id="capture-sound" class="capture-sound" preload="auto">
-        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2LkpONgHBkZHN/ipSUjoF0aGZue4qUlo+DdsHBwb2/vry+vMDAvL+/vb++vby8u76+vL6+vb6+vb2+vr6+vb69vb29vry8vL28vb28vLy7u7y8vLy7" type="audio/wav">
-    </audio>
-
-    <!-- Hidden data elements -->
-    <span id="session-name">{{ session_name }}</span>
-    <span id="output-dir">{{ output_dir }}</span>
-
-    <div class="container">
-        <a href="/" class="back-link">← Back to Doodle Scanner</a>
-        <h1>Camera Scan</h1>
-        <p class="subtitle">Position camera over your book and flip pages</p>
-
-        <div class="scanner-frame">
-            <div class="camera-area">
-                <img id="video-feed" src="/video_feed" alt="Camera Feed">
-
-                <!-- Motion indicator -->
-                <div class="motion-bar">
-                    <div class="motion-level" id="motion-level" style="height: 20%"></div>
-                </div>
-
-                <!-- Status overlay -->
-                <div class="status-bar">
-                    <span class="status-text" id="status-text">Ready to scan</span>
-                    <span class="page-count" id="page-count">0 pages</span>
-                </div>
-            </div>
-
-            <!-- Main controls -->
-            <div class="controls-area" id="controls-area">
-                <button class="main-button btn-start" id="main-button" onclick="handleMainButton()">
-                    Start Scanning
-                </button>
-
-                <div class="secondary-actions">
-                    <a href="#" onclick="toggleSettings(); return false;">⚙ Settings</a>
-                    <a href="#" onclick="newSession(); return false;">+ New Session</a>
-                </div>
-            </div>
-
-            <!-- Settings (hidden by default) -->
-            <div class="settings-panel" id="settings-panel">
-                <h3>Settings</h3>
-                <div class="setting-row">
-                    <label>Sensitivity</label>
-                    <input type="range" id="sensitivity" min="1" max="10" value="5" onchange="updateSensitivity(this.value)">
-                    <span class="value" id="sensitivity-val">5</span>
-                </div>
-                <div class="slider-hints">
-                    <span>Thick pages / slow turns</span>
-                    <span>Thin pages / quick turns</span>
-                </div>
-                <div class="setting-row">
-                    <label>Capture Delay</label>
-                    <input type="range" id="stability-delay" min="0.3" max="3" step="0.1" value="1.0" onchange="updateDelay(this.value)">
-                    <span class="value" id="stability-delay-val">1.0s</span>
-                </div>
-                <div class="slider-hints">
-                    <span>Snap faster</span>
-                    <span>More settling time</span>
-                </div>
-                <div class="setting-row">
-                    <label>Camera</label>
-                    <select id="camera-select" onchange="switchCamera(this.value)">
-                        <option value="">Loading...</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- Results (shown after OCR complete) -->
-            <div class="results-panel" id="results-panel">
-                <div class="results-icon">✓</div>
-                <div class="results-title" id="results-title">OCR Complete</div>
-                <div class="results-meta" id="results-meta">4 pages processed</div>
-                <div class="results-actions">
-                    <button class="results-btn" onclick="scanMore()">Scan More</button>
-                    <a class="results-btn primary" id="download-link" href="#" target="_blank">📝 Markdown</a>
-                    <a class="results-btn" id="download-docx" href="#" target="_blank">📄 Word</a>
-                    <button class="results-btn" id="download-pdf" onclick="downloadScannedPDF()">📎 Scanned PDF</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // App state
-        let appState = 'idle'; // idle, scanning, processing, done
-        let isDetecting = false;
-        let captureCount = 0;
-        let ocrOutputUrl = null;
-
-        // State machine: what the main button does
-        function handleMainButton() {
-            switch(appState) {
-                case 'idle':
-                    startScanning();
-                    break;
-                case 'scanning':
-                    stopAndProcess();
-                    break;
-                case 'processing':
-                    // Button is disabled during processing
-                    break;
-                case 'done':
-                    scanMore();
-                    break;
-            }
-        }
-
-        function startScanning() {
-            fetch('/toggle_detection', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    if (data.active) {
-                        isDetecting = true;
-                        setAppState('scanning');
-                    }
-                });
-        }
-
-        function stopAndProcess() {
-            // First stop scanning
-            fetch('/toggle_detection', {method: 'POST'})
-                .then(r => r.json())
-                .then(() => {
-                    isDetecting = false;
-                    // Now run OCR
-                    if (captureCount > 0) {
-                        setAppState('processing');
-                        runOCR();
-                    } else {
-                        setAppState('idle');
-                    }
-                });
-        }
-
-        function runOCR() {
-            const sessionName = document.getElementById('session-name').textContent;
-
-            fetch('/run_ocr', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({session: sessionName})
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.error) {
-                    document.getElementById('status-text').textContent = 'OCR Error: ' + data.error;
-                    document.getElementById('status-text').className = 'status-text error';
-                    setAppState('idle');
-                }
-                // OCR started - status polling will track progress
-            })
-            .catch(err => {
-                document.getElementById('status-text').textContent = 'OCR failed';
-                document.getElementById('status-text').className = 'status-text error';
-                setAppState('idle');
-            });
-        }
-
-        function scanMore() {
-            fetch('/new_session', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('session-name').textContent = data.session_name;
-                    document.getElementById('output-dir').textContent = data.output_dir;
-                    captureCount = 0;
-                    ocrOutputUrl = null;
-                    setAppState('idle');
-                });
-        }
-
-        function newSession() {
-            if (isDetecting) {
-                fetch('/toggle_detection', {method: 'POST'}).then(() => {
-                    isDetecting = false;
-                    scanMore();
-                });
-            } else {
-                scanMore();
-            }
-        }
-
-        function setAppState(state) {
-            appState = state;
-            const btn = document.getElementById('main-button');
-            const controlsArea = document.getElementById('controls-area');
-            const resultsPanel = document.getElementById('results-panel');
-            const statusText = document.getElementById('status-text');
-
-            // Reset
-            controlsArea.style.display = 'flex';
-            resultsPanel.classList.remove('visible');
-            btn.disabled = false;
-
-            switch(state) {
-                case 'idle':
-                    btn.className = 'main-button btn-start';
-                    btn.textContent = 'Start Scanning';
-                    statusText.textContent = 'Ready to scan';
-                    statusText.className = 'status-text';
-                    break;
-
-                case 'scanning':
-                    btn.className = 'main-button btn-stop';
-                    btn.textContent = 'Stop & Process';
-                    statusText.textContent = 'Scanning...';
-                    statusText.className = 'status-text scanning';
-                    break;
-
-                case 'processing':
-                    btn.className = 'main-button btn-processing';
-                    btn.textContent = 'Processing OCR...';
-                    btn.disabled = true;
-                    statusText.textContent = 'Running OCR...';
-                    statusText.className = 'status-text processing';
-                    break;
-
-                case 'done':
-                    controlsArea.style.display = 'none';
-                    resultsPanel.classList.add('visible');
-                    statusText.textContent = 'Complete';
-                    statusText.className = 'status-text';
-                    document.getElementById('results-meta').textContent = captureCount + ' pages processed';
-                    if (ocrOutputUrl) {
-                        const sessionName = document.getElementById('session-name').textContent;
-                        document.getElementById('download-link').href = ocrOutputUrl;
-                        document.getElementById('download-docx').href = '/export_docx/' + sessionName;
-                    }
-                    break;
-            }
-        }
-
-        function downloadScannedPDF() {
-            const sessionName = document.getElementById('session-name').textContent;
-            fetch('/export_pdf', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session: sessionName })
-            })
-            .then(r => {
-                if (!r.ok) throw new Error('Export failed');
-                return r.blob();
-            })
-            .then(blob => {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = sessionName + '_scanned.pdf';
-                a.click();
-                URL.revokeObjectURL(url);
-            })
-            .catch(err => alert('PDF export failed: ' + err.message));
-        }
-
-        function toggleSettings() {
-            document.getElementById('settings-panel').classList.toggle('visible');
-        }
-
-        function loadCameras() {
-            fetch('/list_cameras')
-                .then(r => r.json())
-                .then(data => {
-                    const select = document.getElementById('camera-select');
-                    select.innerHTML = data.cameras.map(i =>
-                        `<option value="${i}" ${i === data.current ? 'selected' : ''}>Camera ${i}</option>`
-                    ).join('');
-                });
-        }
-
-        function switchCamera(index) {
-            if (index === '') return;
-            fetch('/set_camera', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({camera: parseInt(index)})
-            }).then(() => {
-                isDetecting = false;
-                setAppState('idle');
-                document.getElementById('video-feed').src = '/video_feed?' + Date.now();
-            });
-        }
-
-        function updateSensitivity(value) {
-            document.getElementById('sensitivity-val').textContent = value;
-            const motionThreshold = 11 - value;
-            const stabilityThreshold = 2.2 - (value * 0.2);
-
-            fetch('/update_setting', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name: 'motion_threshold', value: motionThreshold})
-            });
-            fetch('/update_setting', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name: 'stability_threshold', value: stabilityThreshold})
-            });
-        }
-
-        function updateDelay(value) {
-            document.getElementById('stability-delay-val').textContent = value + 's';
-            fetch('/update_setting', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name: 'stability_delay', value: parseFloat(value)})
-            });
-        }
-
-        // Poll for status updates
-        let lastCount = 0;
-        setInterval(() => {
-            fetch('/status')
-                .then(r => r.json())
-                .then(data => {
-                    captureCount = data.capture_count;
-                    document.getElementById('page-count').textContent = captureCount + ' page' + (captureCount !== 1 ? 's' : '');
-
-                    // Motion bar
-                    const motionLevel = document.getElementById('motion-level');
-                    const normalizedMotion = Math.min(100, (data.delta / 10) * 100);
-                    motionLevel.style.height = normalizedMotion + '%';
-                    motionLevel.classList.toggle('high', data.delta > data.motion_threshold);
-
-                    // Update status text during scanning
-                    if (appState === 'scanning') {
-                        if (data.state === 'PAGE_TURNING') {
-                            document.getElementById('status-text').textContent = 'Page turning...';
-                            document.getElementById('status-text').className = 'status-text turning';
-                        } else if (data.state === 'STABILIZING') {
-                            document.getElementById('status-text').textContent = 'Stabilizing...';
-                            document.getElementById('status-text').className = 'status-text turning';
-                        } else {
-                            document.getElementById('status-text').textContent = 'Scanning...';
-                            document.getElementById('status-text').className = 'status-text scanning';
-                        }
-                    }
-
-                    // Flash and sound on new capture
-                    if (data.capture_count > lastCount) {
-                        const flash = document.getElementById('capture-flash');
-                        flash.style.display = 'block';
-                        setTimeout(() => flash.style.display = 'none', 200);
-                        try { document.getElementById('capture-sound').play(); } catch(e) {}
-
-                        // Brief "Captured!" message
-                        if (appState === 'scanning') {
-                            document.getElementById('status-text').textContent = 'Captured!';
-                            setTimeout(() => {
-                                if (appState === 'scanning') {
-                                    document.getElementById('status-text').textContent = 'Scanning...';
-                                    document.getElementById('status-text').className = 'status-text scanning';
-                                }
-                            }, 1000);
-                        }
-                    }
-                    lastCount = data.capture_count;
-
-                    // Handle OCR status
-                    if (data.ocr) {
-                        if (data.ocr.state === 'running' && appState === 'processing') {
-                            const desc = data.ocr.current_page || 'Processing...';
-                            const total = data.ocr.total || 0;
-                            const completed = data.ocr.completed || 0;
-                            const pct = total > 0 ? Math.round(completed / total * 100) : 0;
-                            document.getElementById('status-text').textContent =
-                                desc + (pct > 0 ? ` (${pct}%)` : '');
-                        } else if (data.ocr.state === 'complete') {
-                            if (appState === 'processing') {
-                                ocrOutputUrl = data.ocr.output_url;
-                                setAppState('done');
-                            }
-                        } else if (data.ocr.state === 'error' && appState === 'processing') {
-                            document.getElementById('status-text').textContent =
-                                'OCR Error: ' + (data.ocr.error || 'Unknown');
-                            document.getElementById('status-text').className = 'status-text error';
-                            setAppState('idle');
-                        }
-                    }
-                });
-        }, 500);
-
-        // Initialize
-        loadCameras();
-        setAppState('idle');
-    </script>
-</body>
-</html>
-'''
-
-
-LIBRARY_PAGE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Library — Doodle Scanner</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --ink: #1a1a1a;
-            --ink-soft: #3d3d3d;
-            --ink-muted: #6b6b6b;
-            --cream: #faf8f5;
-            --cream-warm: #f5f2ed;
-            --surface: #ffffff;
-            --border: #d4d0c8;
-            --accent: #4f46e5;
-            --accent-soft: #e0e7ff;
-            --success: #16a34a;
-            --error: #dc2626;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--cream);
-            color: var(--ink);
-            min-height: 100vh;
-            padding: 24px;
-        }
-        .container { max-width: 960px; margin: 0 auto; }
-        .back-link {
-            display: inline-flex; align-items: center; gap: 6px;
-            text-decoration: none; color: var(--ink-muted); font-size: 14px;
-            margin-bottom: 24px;
-        }
-        .back-link:hover { color: var(--ink); }
-        h1 {
-            font-family: 'Cormorant Garamond', Georgia, serif;
-            font-size: 32px; font-weight: 600; margin-bottom: 8px;
-        }
-        .subtitle { color: var(--ink-muted); font-size: 14px; margin-bottom: 32px; }
-        .library-table {
-            width: 100%;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        .library-header {
-            display: grid;
-            grid-template-columns: 1fr 80px 70px 100px 180px 120px;
-            gap: 12px;
-            padding: 12px 20px;
-            background: var(--cream-warm);
-            border-bottom: 1px solid var(--border);
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--ink-muted);
-        }
-        .library-row {
-            display: grid;
-            grid-template-columns: 1fr 80px 70px 100px 180px 120px;
-            gap: 12px;
-            padding: 14px 20px;
-            border-bottom: 1px solid var(--border);
-            font-size: 14px;
-            align-items: center;
-            transition: background 0.1s;
-        }
-        .library-row:last-child { border-bottom: none; }
-        .library-row:hover { background: var(--cream); }
-        .item-title {
-            font-weight: 500;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .type-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-        .type-badge.scan { background: var(--accent-soft); color: var(--accent); }
-        .type-badge.upload { background: #fef3c7; color: #92400e; }
-        .status-dot {
-            display: inline-block;
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            margin-right: 6px;
-        }
-        .status-dot.complete { background: var(--success); }
-        .status-dot.pending { background: var(--border); }
-        .status-dot.processing { background: #f59e0b; }
-        .status-dot.error { background: var(--error); }
-        .actions a, .actions button {
-            font-size: 12px;
-            color: var(--accent);
-            text-decoration: none;
-            cursor: pointer;
-            background: none;
-            border: none;
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
-        .actions a:hover, .actions button:hover {
-            background: var(--accent-soft);
-        }
-        .empty-state {
-            padding: 60px 20px;
-            text-align: center;
-            color: var(--ink-muted);
-        }
-        .empty-state h3 { margin-bottom: 8px; color: var(--ink-soft); }
-        .stats-bar {
-            display: flex; gap: 24px; margin-bottom: 24px;
-        }
-        .stat {
-            font-size: 13px; color: var(--ink-muted);
-        }
-        .stat strong { color: var(--ink); font-size: 20px; display: block; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <a href="/" class="back-link">&larr; Back to Doodle Scanner</a>
-        <h1>Library</h1>
-        <p class="subtitle">All your scanned and uploaded documents</p>
-
-        <div class="stats-bar" id="stats-bar"></div>
-
-        <div class="library-table">
-            <div class="library-header">
-                <span>Title</span>
-                <span>Type</span>
-                <span>Pages</span>
-                <span>Status</span>
-                <span>Date</span>
-                <span>Actions</span>
-            </div>
-            <div id="library-body">
-                <div class="empty-state">
-                    <h3>Loading...</h3>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-    async function loadLibrary() {
-        const res = await fetch('/api/library');
-        const data = await res.json();
-        const items = data.items || [];
-        const body = document.getElementById('library-body');
-
-        // Stats
-        const total = items.length;
-        const complete = items.filter(i => i.status === 'complete').length;
-        const totalPages = items.reduce((s, i) => s + (i.pages || 0), 0);
-        document.getElementById('stats-bar').innerHTML =
-            `<div class="stat"><strong>${total}</strong>Documents</div>` +
-            `<div class="stat"><strong>${complete}</strong>Transcribed</div>` +
-            `<div class="stat"><strong>${totalPages}</strong>Total pages</div>`;
-
-        if (items.length === 0) {
-            body.innerHTML = '<div class="empty-state">' +
-                '<h3>No documents yet</h3>' +
-                '<p>Scan a book or upload a PDF to get started.</p></div>';
-            return;
-        }
-
-        body.innerHTML = items.map(item => {
-            const typeClass = item.type === 'scan' ? 'scan' : 'upload';
-            const typeLabel = item.type === 'scan' ? 'Scan' : 'Upload';
-            const statusClass = item.status || 'pending';
-
-            let actions = '';
-            if (item.has_ocr && item.type === 'scan') {
-                actions += `<a href="/session_ocr/${item.id}" target="_blank">Download</a>`;
-            } else if (item.has_ocr && item.type === 'upload') {
-                actions += `<a href="/api/jobs/${item.id}/download" target="_blank">Download</a>`;
-            }
-            if (!item.has_ocr && item.type === 'scan' && item.pages > 0) {
-                actions += `<button onclick="runOCR('${item.id}')">Run OCR</button>`;
-            }
-
-            return `<div class="library-row">
-                <span class="item-title" title="${item.title}">${item.title}</span>
-                <span><span class="type-badge ${typeClass}">${typeLabel}</span></span>
-                <span>${item.pages}</span>
-                <span><span class="status-dot ${statusClass}"></span>${statusClass}</span>
-                <span>${item.date}</span>
-                <span class="actions">${actions}</span>
-            </div>`;
-        }).join('');
-    }
-
-    async function runOCR(sessionId) {
-        const res = await fetch('/run_ocr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: sessionId })
-        });
-        const data = await res.json();
-        if (data.ok) {
-            // Reload after a delay to show progress
-            setTimeout(loadLibrary, 2000);
-        } else {
-            alert('OCR Error: ' + (data.error || 'Unknown'));
-        }
-    }
-
-    loadLibrary();
-    // Auto-refresh every 5 seconds to catch OCR completions
-    setInterval(loadLibrary, 5000);
-    </script>
-</body>
-</html>
-'''
-
+# =============================================================================
+# Routes
+# =============================================================================
 
 @app.route('/')
-def landing():
-    """Root redirects to unified upload page."""
-    return redirect('/upload')
+def index():
+    return render_template('index.html')
 
 
-@app.route('/library')
-def library_page():
-    """Library page — redirects to unified page (library is in sidebar)."""
-    return redirect('/upload')
+@app.route('/api/health')
+def api_health():
+    """Check if API key is configured."""
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("VITE_GEMINI_API_KEY")
+    has_key = bool(api_key and len(api_key) > 10)
+    return jsonify({'has_api_key': has_key, 'scan_model': SCAN_MODEL, 'book_model': BOOK_OCR_MODEL})
 
 
-@app.route('/api/library')
-def api_library():
-    """API: Get all library items (sessions + uploads)."""
-    return jsonify({'items': _get_library_items()})
-
-
-@app.route('/upload')
-def upload_page():
-    """Unified page: upload + jobs + library sidebar."""
-    return render_template_string(UNIFIED_PAGE)
-
-
-@app.route('/camera')
-def camera_page():
-    """Camera scanning page (PageSnap) - uses browser webcam."""
-    return render_template_string(BROWSER_CAMERA_TEMPLATE,
-                                  session_name=page_snap.session_name,
-                                  output_dir=page_snap.output_dir)
+@app.route('/api/state')
+def api_state():
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
+    return jsonify(scan_session.get_state())
 
 
 @app.route('/api/capture', methods=['POST'])
 def api_capture():
-    """Receive a captured frame from the browser webcam."""
-    import base64 as b64
-
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
     data = request.json
     if not data or 'image' not in data:
-        return jsonify({'error': 'No image data'}), 400
-
-    # Expect base64 data URL: "data:image/jpeg;base64,..."
-    image_data = data['image']
-    if ',' in image_data:
-        image_data = image_data.split(',', 1)[1]
-
+        return jsonify({'error': 'No image'}), 400
+    img_data = data['image']
+    if ',' in img_data:
+        img_data = img_data.split(',', 1)[1]
     try:
-        image_bytes = b64.b64decode(image_data)
+        img_bytes = base64.b64decode(img_data)
     except Exception:
-        return jsonify({'error': 'Invalid base64 image'}), 400
+        return jsonify({'error': 'Invalid base64'}), 400
+    with scan_session.lock:
+        result = scan_session.capture_page(img_bytes, rotation=data.get('rotation', 0))
+    return jsonify(result)
 
-    with page_snap.lock:
-        filename = page_snap.save_capture_from_bytes(image_bytes)
 
+@app.route('/api/next-doc', methods=['POST'])
+def api_next_doc():
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
+    with scan_session.lock:
+        result = scan_session.next_document()
+    return jsonify(result)
+
+
+@app.route('/api/finish-scanning', methods=['POST'])
+def api_finish_scanning():
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
+    with scan_session.lock:
+        scan_session.finalize()
+    total_pages = sum(d['page_count'] for d in scan_session.documents)
     return jsonify({
         'ok': True,
-        'filename': filename,
-        'capture_count': page_snap.capture_count
+        'doc_count': len(scan_session.documents),
+        'page_count': total_pages,
+        'estimated_cost': est_scan_cost(total_pages),
     })
 
 
-@app.route('/list_cameras')
-def list_cameras():
-    if not CAMERA_AVAILABLE:
-        return jsonify({'cameras': [], 'current': 0, 'error': 'Camera not available'})
-    cameras = []
-    for i in range(5):
-        cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
-        if cap.isOpened():
-            ret, _ = cap.read()
-            if ret:
-                cameras.append(i)
-            cap.release()
-    return jsonify({'cameras': cameras, 'current': page_snap.camera_index})
+@app.route('/api/classify-session', methods=['POST'])
+def api_classify_session():
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
+    unprocessed = [d for d in scan_session.documents if d['status'] in ('captured', 'queued')]
+    for doc in unprocessed:
+        threading.Thread(target=scan_session._process_doc, args=(doc,), daemon=True).start()
+    return jsonify({'ok': True, 'processing': len(unprocessed)})
 
 
-@app.route('/set_camera', methods=['POST'])
-def set_camera():
-    if not CAMERA_AVAILABLE:
-        return jsonify({'error': 'OpenCV not available'}), 400
-    data = request.json
-    new_index = int(data['camera'])
-    with page_snap.lock:
-        page_snap.detection_active = False
-        if page_snap.cap:
-            page_snap.cap.release()
-            page_snap.cap = None
-        page_snap.camera_index = new_index
-        if page_snap.detector:
-            page_snap.detector.reset()
-    return jsonify({'ok': True, 'camera': new_index})
+@app.route('/api/new-session', methods=['POST'])
+def api_new_session():
+    global scan_session
+    scan_session = ScanSession(output_dir=app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR))
+    return jsonify({'ok': True, 'session_id': scan_session.session_id})
 
 
-@app.route('/video_feed')
-def video_feed():
-    if not CAMERA_AVAILABLE or not page_snap:
-        return jsonify({'error': 'Camera not available on server'}), 400
-    return Response(page_snap.generate_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
-
-@app.route('/toggle_detection', methods=['POST'])
-def toggle_detection():
-    with page_snap.lock:
-        page_snap.detection_active = not page_snap.detection_active
-        if page_snap.detection_active and page_snap.detector:
-            page_snap.detector.reset()
-            page_snap.reset_ocr_status()
-    return jsonify({'active': page_snap.detection_active})
-
-
-@app.route('/set_roi', methods=['POST'])
-def set_roi():
-    data = request.json
-    with page_snap.lock:
-        page_snap.roi = (data['x'], data['y'], data['w'], data['h'])
-    return jsonify({'ok': True})
-
-
-@app.route('/clear_roi', methods=['POST'])
-def clear_roi():
-    with page_snap.lock:
-        page_snap.roi = None
-    return jsonify({'ok': True})
-
-
-@app.route('/new_session', methods=['POST'])
-def new_session():
-    with page_snap.lock:
-        page_snap.detection_active = False
-        page_snap.session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-        page_snap.output_dir = os.path.join(os.path.dirname(__file__), "sessions", page_snap.session_name)
-        os.makedirs(page_snap.output_dir, exist_ok=True)
-        page_snap.capture_count = 0
-        if page_snap.detector:
-            page_snap.detector.reset()
-        page_snap.reset_ocr_status()
-    return jsonify({'session_name': page_snap.session_name, 'output_dir': page_snap.output_dir, 'detection_stopped': True})
-
-
-@app.route('/update_setting', methods=['POST'])
-def update_setting():
-    data = request.json
-    with page_snap.lock:
-        setattr(page_snap.config, data['name'], data['value'])
-        if page_snap.detector:
-            page_snap.detector.config = page_snap.config
-    return jsonify({'ok': True})
-
-
-@app.route('/status')
-def status():
-    with page_snap.lock:
-        ocr_status = dict(page_snap.ocr_status)
-        capture_count = page_snap.capture_count
-        detection_active = page_snap.detection_active
-        if page_snap.detector:
-            state_value = page_snap.detector.state.value
-            last_delta = round(page_snap.detector.last_delta, 1)
-        else:
-            state_value = "browser"
-            last_delta = 0.0
-        motion_threshold = page_snap.config.motion_threshold
-        stability_threshold = page_snap.config.stability_threshold
-
-    output = ocr_status.get('output')
-    session = ocr_status.get('session')
-    if output and session:
-        if isinstance(output, list):
-            # Multi-model: use first output for primary URL
-            if output and os.path.exists(output[0]):
-                ocr_status['output_url'] = url_for('session_ocr', session_name=session)
-        elif os.path.exists(output):
-            ocr_status['output_url'] = url_for('session_ocr', session_name=session)
-
-    return jsonify({
-        'capture_count': capture_count,
-        'detection_active': detection_active,
-        'state': state_value,
-        'delta': last_delta,
-        'motion_threshold': motion_threshold,
-        'stability_threshold': stability_threshold,
-        'ocr': ocr_status
-    })
-
-
-@app.route('/list_sessions')
-def list_sessions():
-    """List all available sessions."""
-    sessions_dir = os.path.join(os.path.dirname(__file__), "sessions")
-    sessions = []
-    if os.path.exists(sessions_dir):
-        for name in sorted(os.listdir(sessions_dir), reverse=True):
-            session_path = os.path.join(sessions_dir, name)
-            if os.path.isdir(session_path):
-                images = [f for f in os.listdir(session_path) if f.endswith('.jpg')]
-                sessions.append({
-                    'name': name,
-                    'image_count': len(images),
-                    'has_ocr': os.path.exists(os.path.join(session_path, f"{name}_ocr.md"))
-                })
-    return jsonify({'sessions': sessions, 'current': page_snap.session_name})
-
-
-@app.route('/run_ocr', methods=['POST'])
-def run_ocr():
-    """Run OCR on a session. Supports multi-model comparison."""
-    data = request.json or {}
-    session_name = data.get('session') or page_snap.session_name
-    models = data.get('models')  # list of model names, or None for default
-    preferences = data.get('preferences')  # OCR preferences (page numbers, etc.)
-
-    started, error = page_snap.trigger_ocr(session_name, models=models, preferences=preferences)
-    if error:
-        code = 404 if "Session not found" in error else 409 if "already running" in error else 400
-        return jsonify({'error': error}), code
-
-    return jsonify({'ok': True})
-
-
-@app.route('/session_ocr/<session_name>')
-def session_ocr(session_name):
-    """Serve the OCR markdown for a session."""
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
-    md_path = os.path.join(session_path, f"{session_name}_ocr.md")
-
-    if not os.path.exists(md_path):
-        # Try any _ocr file (multi-model outputs)
-        for f in sorted(os.listdir(session_path)):
-            if f.endswith('.md') and '_ocr' in f:
-                md_path = os.path.join(session_path, f)
-                break
-
-    if not os.path.exists(md_path):
-        return jsonify({'error': 'OCR output not found'}), 404
-
-    return send_file(md_path, mimetype='text/markdown', download_name=f"{session_name}_ocr.md")
-
-
-@app.route('/export_pdf', methods=['POST'])
-def export_pdf():
-    """Compile session images into a PDF and return JSON metadata."""
-    data = request.json
-    session_name = data.get('session', page_snap.session_name)
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
-
-    if not os.path.exists(session_path):
-        return jsonify({'error': f'Session not found: {session_name}'}), 404
-
-    # Get all images sorted by name
-    images = sorted([f for f in os.listdir(session_path) if f.endswith('.jpg')])
-    if not images:
-        return jsonify({'error': 'No images in session'}), 400
-
-    try:
-        from PIL import Image
-
-        # Load all images and convert to RGB
-        image_list = []
-        for img_name in images:
-            img_path = os.path.join(session_path, img_name)
-            img = Image.open(img_path).convert('RGB')
-            image_list.append(img)
-
-        # Create PDF
-        pdf_path = os.path.join(session_path, f"{session_name}.pdf")
-        if len(image_list) > 0:
-            image_list[0].save(
-                pdf_path,
-                save_all=True,
-                append_images=image_list[1:] if len(image_list) > 1 else [],
-                resolution=100.0
-            )
-
-        return jsonify({
-            'ok': True,
-            'page_count': len(image_list),
-            'pdf_url': f'/download_pdf/{session_name}'
-        })
-    except ImportError:
-        return jsonify({'error': 'Pillow not installed. Run: pip install Pillow'}), 500
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/download_pdf/<session_name>')
-def download_pdf(session_name):
-    """Download the PDF for a session."""
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
-    pdf_path = os.path.join(session_path, f"{session_name}.pdf")
-
-    if not os.path.exists(pdf_path):
-        return jsonify({'error': 'PDF not found. Export first.'}), 404
-
-    return send_file(pdf_path, as_attachment=True, download_name=f"{session_name}.pdf")
-
-
-# ============================================================================
-# PDF Upload API
-# ============================================================================
-
-@app.route('/api/upload', methods=['POST'])
-def api_upload():
-    """Upload a PDF for OCR processing."""
+@app.route('/api/upload-pdf', methods=['POST'])
+def api_upload_pdf():
     if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-
+        return jsonify({'error': 'No file'}), 400
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-
     if not file.filename.lower().endswith('.pdf'):
-        return jsonify({'error': 'Only PDF files are supported'}), 400
-
-    # Save file
+        return jsonify({'error': 'PDF only'}), 400
     filename = secure_filename(file.filename)
-    file_path = os.path.join(pdf_manager.upload_dir, f"{uuid.uuid4().hex[:8]}_{filename}")
+    file_path = os.path.join(book_ocr.upload_dir, f"{uuid.uuid4().hex[:8]}_{filename}")
     file.save(file_path)
-
-    # Get page count
     try:
         from pdf_pipeline import get_pdf_info
-        pdf_info = get_pdf_info(file_path)
-        page_count = pdf_info['page_count']
-    except Exception as e:
-        os.remove(file_path)
-        return jsonify({'error': f'Invalid PDF: {e}'}), 400
-
-    # Create job
-    job_id = pdf_manager.create_job(filename, file_path, page_count)
-
+        page_count = get_pdf_info(file_path)['page_count']
+    except Exception:
+        page_count = 1
+    # Create a Book OCR job (can be used for either classify or book OCR)
+    job_id = book_ocr.create_job(filename, file_path, page_count)
     return jsonify({
-        'ok': True,
-        'job_id': job_id,
-        'filename': filename,
-        'page_count': page_count
+        'ok': True, 'job_id': job_id, 'filename': filename, 'page_count': page_count,
+        'classify_cost': est_scan_cost(page_count), 'book_cost': est_book_cost(page_count),
     })
 
 
-@app.route('/api/jobs')
-def api_list_jobs():
-    """List all PDF processing jobs."""
-    return jsonify({'jobs': pdf_manager.list_jobs()})
-
-
-@app.route('/api/jobs/<job_id>')
-def api_get_job(job_id):
-    """Get status of a specific job."""
-    job = pdf_manager.get_job(job_id)
+@app.route('/api/start-classify', methods=['POST'])
+def api_start_classify():
+    """Classify an uploaded PDF (scan pipeline)."""
+    data = request.json or {}
+    job_id = data.get('job_id')
+    job = book_ocr.get_job(job_id) if job_id else None
     if not job:
         return jsonify({'error': 'Job not found'}), 404
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
+
+    # Create a doc entry and process through scan pipeline
+    doc_id = f"doc_{len(scan_session.documents) + 1:03d}"
+    doc = {
+        'id': doc_id, 'page_count': job['page_count'], 'images': [],
+        'pdf_path': job['file_path'], 'status': 'processing',
+    }
+    scan_session.documents.append(doc)
+    scan_session._new_document()
+
+    # Classify directly (PDF already exists)
+    threading.Thread(target=scan_session._classify_doc, args=(doc, job['file_path']), daemon=True).start()
+
+    # Remove from book OCR jobs since it's being classified instead
+    with book_ocr.lock:
+        book_ocr.jobs.pop(job_id, None)
+
+    return jsonify({'ok': True, 'doc_id': doc_id})
+
+
+@app.route('/api/start-book-ocr', methods=['POST'])
+def api_start_book_ocr():
+    data = request.json or {}
+    job_id = data.get('job_id')
+    if not job_id:
+        return jsonify({'error': 'No job_id'}), 400
+    ok, err = book_ocr.start(job_id)
+    if not ok:
+        return jsonify({'error': err}), 400
+    return jsonify({'ok': True})
+
+
+@app.route('/api/book-status/<job_id>')
+def api_book_status(job_id):
+    job = book_ocr.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Not found'}), 404
     return jsonify(job)
 
 
-@app.route('/api/jobs/<job_id>/analyze', methods=['POST'])
-def api_analyze_job(job_id):
-    """Run pre-flight analysis on a PDF job."""
-    success, error = pdf_manager.analyze_job(job_id)
-    if not success:
-        return jsonify({'error': error}), 400
-    return jsonify({'ok': True})
-
-
-@app.route('/api/jobs/<job_id>/start', methods=['POST'])
-def api_start_job(job_id):
-    """Start processing a PDF job with optional preferences."""
-    # Handle requests with or without JSON body
-    try:
-        data = request.get_json(silent=True) or {}
-    except Exception:
-        data = {}
-    preferences = data.get('preferences')
-    model = data.get('model')
-    page_start = data.get('page_start')  # 0-indexed
-    page_end = data.get('page_end')      # exclusive
-    success, error = pdf_manager.start_processing(job_id, preferences=preferences, model=model, page_start=page_start, page_end=page_end)
-    if not success:
-        return jsonify({'error': error}), 400
-    return jsonify({'ok': True})
-
-
-@app.route('/api/jobs/<job_id>/chunks')
-def api_list_chunks(job_id):
-    """List individual chunk files for a completed job."""
-    job = pdf_manager.get_job(job_id)
+@app.route('/api/book-download/<job_id>')
+def api_book_download(job_id):
+    job = book_ocr.get_job(job_id)
     if not job or not job.get('output_path'):
-        return jsonify({'chunks': []})
-
-    chunks_dir = Path(job['output_path']).parent / "chunks"
-    if not chunks_dir.exists():
-        return jsonify({'chunks': []})
-
-    chunk_files = sorted(chunks_dir.glob(f"{Path(job['output_path']).stem.replace('_ocr', '')}_chunk*.md"))
-    chunks = []
-    for i, cf in enumerate(chunk_files):
-        # Read first line for page info
-        with open(cf) as f:
-            first_line = f.readline().strip()
-        pages = first_line.replace('<!-- ', '').replace(' -->', '').split(': ')[-1] if '<!--' in first_line else f'Chunk {i+1}'
-        chunks.append({
-            'label': f'Ch.{i+1}',
-            'pages': pages,
-            'filename': cf.name,
-        })
-    return jsonify({'chunks': chunks})
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(job['output_path'], as_attachment=True, download_name=os.path.basename(job['output_path']))
 
 
-@app.route('/api/jobs/<job_id>/chunks/<int:chunk_num>/download')
-def api_download_chunk(job_id, chunk_num):
-    """Download a specific chunk file."""
-    job = pdf_manager.get_job(job_id)
-    if not job or not job.get('output_path'):
-        return jsonify({'error': 'Job not found'}), 404
-
-    chunks_dir = Path(job['output_path']).parent / "chunks"
-    chunk_files = sorted(chunks_dir.glob(f"{Path(job['output_path']).stem.replace('_ocr', '')}_chunk*.md"))
-
-    if chunk_num < 1 or chunk_num > len(chunk_files):
-        return jsonify({'error': 'Chunk not found'}), 404
-
-    return send_file(
-        str(chunk_files[chunk_num - 1]),
-        as_attachment=True,
-        download_name=chunk_files[chunk_num - 1].name
-    )
+@app.route('/api/library')
+def api_library():
+    return jsonify(get_library(app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR)))
 
 
-@app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
-def api_cancel_job(job_id):
-    """Cancel a stuck or processing job."""
-    job = pdf_manager.get_job(job_id)
-    if not job:
-        return jsonify({'error': 'Job not found'}), 404
-
-    if job['status'] in ('complete', 'error'):
-        return jsonify({'error': f"Job already {job['status']}"}), 400
-
-    pdf_manager.update_job(
-        job_id,
-        status='error',
-        error='Cancelled by user',
-        completed_at=datetime.now().isoformat()
-    )
-    return jsonify({'ok': True})
+@app.route('/api/file/<path:filepath>')
+def api_file(filepath):
+    output_dir = app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR)
+    full_path = os.path.join(output_dir, filepath)
+    if not os.path.exists(full_path):
+        return jsonify({'error': 'Not found'}), 404
+    if not os.path.realpath(full_path).startswith(os.path.realpath(output_dir)):
+        return jsonify({'error': 'Forbidden'}), 403
+    return send_file(full_path)
 
 
-@app.route('/api/jobs/<job_id>/download')
-def api_download_job(job_id):
-    """Download the OCR output for a completed job."""
-    job = pdf_manager.get_job(job_id)
-    if not job:
-        return jsonify({'error': 'Job not found'}), 404
-
-    if job['status'] != 'complete' or not job.get('output_path'):
-        return jsonify({'error': 'Job not complete'}), 400
-
-    if not os.path.exists(job['output_path']):
-        return jsonify({'error': 'Output file not found'}), 404
-
-    return send_file(
-        job['output_path'],
-        as_attachment=True,
-        download_name=f"{Path(job['filename']).stem}_ocr.md"
-    )
-
-
-@app.route('/export_docx/<session_name>')
-def export_docx(session_name):
-    """Convert OCR markdown to .docx and serve it."""
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
-
-    # Find OCR output (try default name first, then model-specific)
-    md_path = os.path.join(session_path, f"{session_name}_ocr.md")
-    if not os.path.exists(md_path):
-        # Try any _ocr_ file
-        if os.path.isdir(session_path):
-            for f in os.listdir(session_path):
-                if f.endswith('.md') and '_ocr' in f:
-                    md_path = os.path.join(session_path, f)
-                    break
-
-    if not os.path.exists(md_path):
-        return jsonify({'error': 'No OCR output found'}), 404
-
-    try:
-        from docx_export import markdown_to_docx
-
-        with open(md_path, 'r') as f:
-            md_text = f.read()
-
-        docx_path = md_path.replace('.md', '.docx')
-        markdown_to_docx(md_text, docx_path)
-
-        return send_file(docx_path, as_attachment=True,
-                        download_name=f"{session_name}_ocr.docx")
-    except ImportError:
-        return jsonify({'error': 'python-docx not installed'}), 500
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/export_notion', methods=['POST'])
-def export_notion():
-    """Export OCR markdown to Notion (placeholder — needs NOTION_API_KEY)."""
+@app.route('/api/update-setting', methods=['POST'])
+def api_update_setting():
+    if not scan_session:
+        return jsonify({'error': 'No session'}), 400
     data = request.json or {}
-    session_name = data.get('session')
-    if not session_name:
-        return jsonify({'error': 'No session specified'}), 400
+    name = data.get('name')
+    value = data.get('value')
+    if name and hasattr(scan_session.config, name):
+        setattr(scan_session.config, name, float(value))
+        return jsonify({'ok': True})
+    return jsonify({'error': 'Invalid setting'}), 400
 
-    notion_key = os.environ.get('NOTION_API_KEY')
-    if not notion_key:
-        return jsonify({'error': 'NOTION_API_KEY not configured'}), 400
 
-    session_path = os.path.join(os.path.dirname(__file__), "sessions", session_name)
-    md_path = os.path.join(session_path, f"{session_name}_ocr.md")
-    if not os.path.exists(md_path):
-        return jsonify({'error': 'No OCR output found'}), 404
-
-    # Notion export would go here — using the notion_markdown.py or API
-    return jsonify({'error': 'Notion export not yet implemented'}), 501
-
+# =============================================================================
+# Main
+# =============================================================================
 
 if __name__ == '__main__':
     import argparse
-    import os
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--camera', type=int, default=0)
+    parser = argparse.ArgumentParser(description='Scandoc 9000')
+    parser.add_argument('-o', '--output', default=DEFAULT_OUTPUT_DIR)
     parser.add_argument('-p', '--port', type=int, default=int(os.environ.get('PORT', 5001)))
     args = parser.parse_args()
 
-    print(f"\nDoodle Scanner")
-    print(f"==============")
-    if CAMERA_AVAILABLE:
-        page_snap.camera_index = args.camera
-        print(f"Camera: {args.camera} (local OpenCV + browser)")
-    else:
-        print("Camera: Browser webcam (getUserMedia)")
-    print(f"Port: {args.port}")
-    if args.port == 5001:
-        print(f"Open http://localhost:{args.port} in your browser")
+    output_dir = os.path.expanduser(args.output)
+    os.makedirs(output_dir, exist_ok=True)
+    app.config['OUTPUT_DIR'] = output_dir
+
+    scan_session = ScanSession(output_dir=output_dir)
+
+    print(f"\n  SCANDOC 9000")
+    print(f"  ============")
+    print(f"  Output:  {output_dir}")
+    print(f"  Scan:    {SCAN_MODEL}")
+    print(f"  Book:    {BOOK_OCR_MODEL}")
+    print(f"  Port:    {args.port}")
+    print(f"  Open:    http://localhost:{args.port}")
     print()
 
     app.run(host='0.0.0.0', port=args.port, debug=False, threaded=True)

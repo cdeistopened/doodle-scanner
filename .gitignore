@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+uploads/
+output/
+sessions/
+.DS_Store
+mockups/
+tasks/
+CLAUDE.md
+.claude/
