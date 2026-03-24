@@ -90,10 +90,10 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
 </header>
 
 <!-- ======================== SCANNER VIEW ======================== -->
-<div id="viewScanner" class="view active flex-1 pt-12 flex flex-col lg:flex-row">
+<div id="viewScanner" class="view active flex-1 pt-12 pb-16 lg:pb-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
 
   <!-- LEFT: Inputs -->
-  <div class="lg:w-1/2 xl:w-3/5 flex flex-col p-4 md:p-6 gap-4 overflow-y-auto">
+  <div class="lg:w-1/2 xl:w-3/5 flex flex-col p-3 md:p-6 gap-3 md:gap-4 lg:overflow-y-auto">
 
     <!-- Camera viewfinder -->
     <div class="relative bg-black rounded overflow-hidden scanner-glow" style="aspect-ratio:4/3;">
@@ -184,9 +184,16 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
     <input type="file" id="photoInput" accept="image/*" capture="environment" multiple class="hidden"/>
   </div>
 
-  <!-- RIGHT: Output -->
-  <div class="lg:w-1/2 xl:w-2/5 flex flex-col bg-surface-container-high border-l border-outline-variant overflow-y-auto">
-    <div class="p-4 md:p-6 flex flex-col gap-4">
+  <!-- RIGHT: Output (sidebar on desktop, inline on mobile) -->
+  <div class="lg:w-1/2 xl:w-2/5 flex flex-col bg-surface-container-high lg:border-l border-t lg:border-t-0 border-outline-variant lg:overflow-y-auto">
+
+    <!-- Mobile: collapsible output toggle -->
+    <button id="outputToggle" onclick="toggleOutput()" class="lg:hidden flex items-center justify-between px-3 py-2 bg-surface-container-high border-b border-outline-variant">
+      <span class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Results <span id="outputBadge" class="text-primary-container"></span></span>
+      <span class="material-symbols-outlined text-sm text-outline" id="outputChevron">expand_more</span>
+    </button>
+
+    <div id="outputPanel" class="hidden lg:flex flex-col p-3 md:p-6 gap-3 md:gap-4">
 
       <!-- Processing queue -->
       <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1">Processing</h2>
@@ -195,27 +202,27 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
       </div>
 
       <!-- Recent results -->
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mt-4">Recent Results</h2>
+      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mt-2">Recent Results</h2>
       <div id="recentResults" class="flex flex-col gap-2">
         <div class="font-mono text-xs text-outline italic">Scan or upload to get started</div>
       </div>
 
       <!-- View library link -->
-      <button onclick="showView('library')" class="mt-4 bg-surface text-on-surface font-mono text-xs uppercase tracking-widest px-4 py-3 border border-outline-variant hard-shadow keycap-sm flex items-center justify-center gap-2">
+      <button onclick="showView('library')" class="mt-2 bg-surface text-on-surface font-mono text-xs uppercase tracking-widest px-4 py-2.5 border border-outline-variant hard-shadow keycap-sm flex items-center justify-center gap-2">
         <span class="material-symbols-outlined text-sm">folder_open</span> VIEW FULL LIBRARY
       </button>
     </div>
 
     <!-- Log area -->
-    <div class="mt-auto border-t border-outline-variant">
-      <div id="logArea" class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container/70 max-h-40 overflow-y-auto leading-relaxed hidden">
+    <div class="border-t border-outline-variant">
+      <div id="logArea" class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container/70 max-h-32 lg:max-h-40 overflow-y-auto leading-relaxed hidden">
       </div>
     </div>
   </div>
 </div>
 
 <!-- ======================== LIBRARY VIEW ======================== -->
-<div id="viewLibrary" class="view flex-1 pt-12 flex-col p-4 md:p-8 overflow-y-auto">
+<div id="viewLibrary" class="view flex-1 pt-12 pb-16 lg:pb-0 flex-col p-4 md:p-8 overflow-y-auto">
   <div class="max-w-6xl mx-auto w-full">
     <div class="flex justify-between items-center mb-4">
       <div>
@@ -244,9 +251,20 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
 </div>
 
 <!-- ======================== SETTINGS VIEW ======================== -->
-<div id="viewSettings" class="view flex-1 pt-12 flex-col p-4 md:p-8 overflow-y-auto">
+<div id="viewSettings" class="view flex-1 pt-12 pb-16 lg:pb-0 flex-col p-4 md:p-8 overflow-y-auto">
   <div class="max-w-lg mx-auto w-full flex flex-col gap-6">
     <h1 class="font-headline text-2xl font-bold uppercase tracking-tighter">Settings</h1>
+
+    <!-- Output Directory -->
+    <div class="bg-surface-container-lowest p-5 border-2 border-primary hard-shadow">
+      <h2 class="font-headline text-xs font-bold uppercase tracking-widest border-b border-outline-variant pb-2 mb-3">Save Location</h2>
+      <p class="font-body text-xs text-on-surface-variant mb-3">All scanned documents, PDFs, and text files are saved here. Category subfolders are created automatically.</p>
+      <div class="flex gap-2">
+        <input id="outputPath" type="text" class="flex-1 bg-surface-container-high border border-outline-variant font-mono text-sm px-3 py-2 focus:ring-1 focus:ring-primary" placeholder="~/scandoc-output"/>
+        <button onclick="saveOutputPath()" class="bg-primary text-on-primary font-headline font-bold px-4 py-2 text-xs uppercase tracking-widest keycap-sm">SET</button>
+      </div>
+      <div id="outputStatus" class="font-mono text-[10px] text-outline mt-2"></div>
+    </div>
 
     <!-- Motion Detection -->
     <div class="bg-surface-container-lowest p-5 border border-outline-variant hard-shadow">
@@ -630,6 +648,9 @@ async function pollStatus() {
       log.scrollTop = log.scrollHeight;
     }
 
+    // Update mobile output badge
+    updateOutputBadge(done.length + active.length);
+
     // Keep polling if active
     const hasActive = active.length>0 || (state.documents||[]).some(d=>d.status==='queued');
     if(hasActive) setTimeout(pollStatus,1000); else { polling=false; refreshState(); }
@@ -738,6 +759,56 @@ document.getElementById('delaySlider').addEventListener('input', function() {
     body:JSON.stringify({name:'stability_delay',value:parseFloat(this.value)})});
 });
 
+// ==================== MOBILE OUTPUT TOGGLE ====================
+function toggleOutput() {
+  const panel = document.getElementById('outputPanel');
+  const chevron = document.getElementById('outputChevron');
+  panel.classList.toggle('hidden');
+  chevron.textContent = panel.classList.contains('hidden') ? 'expand_more' : 'expand_less';
+}
+
+// Auto-expand output panel when results come in (mobile)
+function updateOutputBadge(count) {
+  const badge = document.getElementById('outputBadge');
+  if (badge && count > 0) {
+    badge.textContent = '(' + count + ')';
+    // Auto-expand on first result
+    const panel = document.getElementById('outputPanel');
+    if (panel && panel.classList.contains('hidden') && window.innerWidth < 1024) {
+      toggleOutput();
+    }
+  }
+}
+
+// ==================== OUTPUT PATH ====================
+async function loadOutputPath() {
+  try {
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    if (data.output_dir) {
+      document.getElementById('outputPath').value = data.output_dir;
+      document.getElementById('outputStatus').textContent = 'Current: ' + data.output_dir;
+    }
+  } catch(e) {}
+}
+
+async function saveOutputPath() {
+  const path = document.getElementById('outputPath').value.trim();
+  if (!path) return;
+  const res = await fetch('/api/set-output', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({path: path})
+  });
+  const data = await res.json();
+  if (data.ok) {
+    document.getElementById('outputStatus').textContent = 'Saved: ' + data.path;
+    document.getElementById('outputStatus').style.color = '#2aa198';
+  } else {
+    document.getElementById('outputStatus').textContent = 'Error: ' + (data.error || 'Failed');
+    document.getElementById('outputStatus').style.color = '#ba1a1a';
+  }
+}
+
 // ==================== API KEY CHECK ====================
 async function checkHealth() {
   try {
@@ -754,10 +825,9 @@ async function checkHealth() {
 
 // ==================== INIT ====================
 checkHealth();
+loadOutputPath();
 startCamera();
 refreshState();
-// Add padding for mobile bottom nav
-if(window.innerWidth < 1024) document.body.style.paddingBottom = '56px';
 </script>
 </body>
 </html>

@@ -461,7 +461,29 @@ def api_health():
     """Check if API key is configured."""
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("VITE_GEMINI_API_KEY")
     has_key = bool(api_key and len(api_key) > 10)
-    return jsonify({'has_api_key': has_key, 'scan_model': SCAN_MODEL, 'book_model': BOOK_OCR_MODEL})
+    return jsonify({
+        'has_api_key': has_key, 'scan_model': SCAN_MODEL, 'book_model': BOOK_OCR_MODEL,
+        'output_dir': app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR),
+    })
+
+
+@app.route('/api/set-output', methods=['POST'])
+def api_set_output():
+    """Change the output directory. Creates it if it doesn't exist."""
+    global scan_session
+    data = request.json or {}
+    path = data.get('path', '').strip()
+    if not path:
+        return jsonify({'error': 'No path provided'}), 400
+    path = os.path.expanduser(path)
+    try:
+        os.makedirs(path, exist_ok=True)
+        app.config['OUTPUT_DIR'] = path
+        # Restart session with new output dir
+        scan_session = ScanSession(output_dir=path)
+        return jsonify({'ok': True, 'path': path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 
 @app.route('/api/state')
