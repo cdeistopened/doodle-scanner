@@ -117,6 +117,95 @@ def est_cost(pages: int, full_ocr: bool = False) -> float:
     return round((pages * TOKENS_PER_PAGE_IMG / 1e6) * COST_IN + (pages * TOKENS_PER_PAGE_TXT * txt_mult / 1e6) * COST_OUT, 4)
 
 
+def quick_scan(pdf_path: str) -> dict:
+    """Free instant document check using PyMuPDF text extraction.
+
+    No API call — reads the embedded text layer to detect:
+    - Word density per page (for cost/time estimates)
+    - Whether a text layer exists at all
+    - Repeated headers/footers (exact text to strip)
+    - Basic content preview
+    """
+    if fitz is None:
+        return {'error': 'PyMuPDF not installed'}
+
+    doc = fitz.open(pdf_path)
+    page_count = len(doc)
+    has_text_layer = False
+    total_words = 0
+    page_samples = []
+    header_candidates = {}
+    footer_candidates = {}
+
+    # Sample up to 10 pages spread through the doc
+    sample_indices = list(range(min(10, page_count)))
+    if page_count > 10:
+        step = page_count // 10
+        sample_indices = [i * step for i in range(10)]
+
+    for idx in sample_indices:
+        if idx >= page_count:
+            continue
+        page = doc[idx]
+        text = page.get_text().strip()
+        words = len(text.split()) if text else 0
+        total_words += words
+        if words > 5:
+            has_text_layer = True
+
+        # Check first and last lines for repeated headers/footers
+        lines = text.split('\n') if text else []
+        if len(lines) >= 2:
+            first_line = lines[0].strip()
+            last_line = lines[-1].strip()
+            if first_line and len(first_line) < 80:
+                header_candidates[first_line] = header_candidates.get(first_line, 0) + 1
+            if last_line and len(last_line) < 80:
+                footer_candidates[last_line] = footer_candidates.get(last_line, 0) + 1
+
+        if len(page_samples) < 3 and words > 10:
+            page_samples.append({'page': idx + 1, 'words': words, 'preview': text[:200]})
+
+    doc.close()
+
+    # Detect repeated headers/footers (appears on >40% of sampled pages)
+    threshold = len(sample_indices) * 0.4
+    detected_header = None
+    detected_footer = None
+    for text, count in header_candidates.items():
+        if count >= threshold and not text.isdigit():
+            detected_header = text
+            break
+    for text, count in footer_candidates.items():
+        if count >= threshold and not text.isdigit():
+            detected_footer = text
+            break
+
+    avg_words = total_words / len(sample_indices) if sample_indices else 0
+    density = 'dense' if avg_words > 400 else 'normal' if avg_words > 150 else 'sparse'
+
+    # Better time/cost estimate based on actual density
+    if has_text_layer:
+        est_total_words = int(avg_words * page_count)
+    else:
+        est_total_words = page_count * 300  # guess for image-only PDFs
+
+    est_time_secs = page_count * (3 if density == 'sparse' else 4 if density == 'normal' else 5)
+
+    return {
+        'page_count': page_count,
+        'has_text_layer': has_text_layer,
+        'avg_words_per_page': round(avg_words),
+        'est_total_words': est_total_words,
+        'density': density,
+        'detected_header': detected_header,
+        'detected_footer': detected_footer,
+        'est_time_seconds': est_time_secs,
+        'est_time_display': f"~{est_time_secs // 60}min" if est_time_secs >= 60 else f"~{est_time_secs}s",
+        'samples': page_samples,
+    }
+
+
 # =============================================================================
 # Scan Pipeline (from scan_my_life experiment)
 # =============================================================================
@@ -559,16 +648,18 @@ def api_upload_pdf():
     filename = secure_filename(file.filename)
     file_path = os.path.join(book_ocr.upload_dir, f"{uuid.uuid4().hex[:8]}_{filename}")
     file.save(file_path)
-    try:
-        from pdf_pipeline import get_pdf_info
-        page_count = get_pdf_info(file_path)['page_count']
-    except Exception:
-        page_count = 1
-    # Create a Book OCR job (can be used for either classify or book OCR)
+
+    # Quick scan — free, instant, uses PyMuPDF text extraction
+    scan = quick_scan(file_path)
+    page_count = scan['page_count']
+
     job_id = book_ocr.create_job(filename, file_path, page_count)
     return jsonify({
-        'ok': True, 'job_id': job_id, 'filename': filename, 'page_count': page_count,
-        'classify_cost': est_cost(page_count), 'book_cost': est_cost(page_count, full_ocr=True),
+        'ok': True, 'job_id': job_id, 'filename': filename,
+        'page_count': page_count,
+        'classify_cost': est_cost(page_count),
+        'book_cost': est_cost(page_count, full_ocr=True),
+        'quick_scan': scan,
     })
 
 

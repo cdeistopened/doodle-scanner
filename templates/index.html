@@ -582,14 +582,36 @@ async function handlePdf(file) {
   pendingPdfFile = data;
   document.getElementById('pdfChoiceTitle').textContent = data.filename;
 
-  // Build description with time estimate
-  const pages = data.page_count;
-  const classifyTime = Math.max(3, pages * 2); // ~2s per page for classify
-  const bookTime = Math.max(10, pages * 4); // ~4s per page for book OCR
-  let desc = pages + ' pages detected';
+  const qs = data.quick_scan || {};
+  const pages = qs.page_count || data.page_count;
+
+  // Build description from quick scan
+  let desc = pages + ' pages';
+  if (qs.density) desc += ' \u00B7 ' + qs.density;
+  if (qs.avg_words_per_page) desc += ' \u00B7 ~' + qs.avg_words_per_page + ' words/page';
+  if (!qs.has_text_layer) desc += ' \u00B7 image-only (no text layer)';
   document.getElementById('pdfChoicePages').textContent = desc;
-  document.getElementById('classifyCost').textContent = '~$' + data.classify_cost.toFixed(3) + ' / ~' + classifyTime + 's';
-  document.getElementById('bookOcrCost').textContent = '~$' + data.book_cost.toFixed(3) + ' / ~' + Math.round(bookTime/60) + 'min';
+
+  // Show quick scan details in the preflight panel
+  const pfInfo = document.getElementById('preflightInfo');
+  const pfContent = document.getElementById('preflightContent');
+  if (qs.detected_header || qs.detected_footer || (qs.samples && qs.samples.length > 0)) {
+    let details = '';
+    if (qs.detected_header) details += 'Header: "' + qs.detected_header + '"\n';
+    if (qs.detected_footer) details += 'Footer: "' + qs.detected_footer + '"\n';
+    if (qs.est_total_words) details += 'Est. ' + qs.est_total_words.toLocaleString() + ' total words\n';
+    if (qs.samples && qs.samples[0]) details += 'Preview: ' + qs.samples[0].preview.slice(0, 100) + '...';
+    pfContent.textContent = details;
+    pfInfo.classList.remove('hidden');
+  } else {
+    pfInfo.classList.add('hidden');
+  }
+
+  // Cost + time from quick scan
+  const bookTimeStr = qs.est_time_display || ('~' + Math.round(pages * 4 / 60) + 'min');
+  const classifyTimeStr = pages <= 10 ? '~' + (pages * 3) + 's' : ('~' + Math.round(pages * 2 / 60) + 'min');
+  document.getElementById('classifyCost').textContent = '~$' + data.classify_cost.toFixed(3) + ' / ' + classifyTimeStr;
+  document.getElementById('bookOcrCost').textContent = '~$' + data.book_cost.toFixed(3) + ' / ' + bookTimeStr;
   document.getElementById('pdfChoice').classList.remove('hidden');
 }
 
