@@ -39,16 +39,13 @@ except ImportError:
 # =============================================================================
 
 DEFAULT_OUTPUT_DIR = os.path.expanduser("~/scandoc-output")
-SCAN_MODEL = "gemini-3.1-flash-lite-preview"
-BOOK_OCR_MODEL = "gemini-3-flash-preview"
+MODEL = "gemini-3.1-flash-lite-preview"
 MAX_IMAGE_DIMENSION = 1500
 JPEG_QUALITY = 85
 
-# Cost estimates (per 1M tokens)
-SCAN_COST_IN = 0.25
-SCAN_COST_OUT = 1.50
-BOOK_COST_IN = 0.50
-BOOK_COST_OUT = 3.00
+# Cost estimates for gemini-3.1-flash-lite-preview (per 1M tokens)
+COST_IN = 0.25
+COST_OUT = 1.50
 TOKENS_PER_PAGE_IMG = 1800
 TOKENS_PER_PAGE_TXT = 400
 
@@ -114,11 +111,10 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
-def est_scan_cost(pages: int) -> float:
-    return round((pages * TOKENS_PER_PAGE_IMG / 1e6) * SCAN_COST_IN + (pages * TOKENS_PER_PAGE_TXT / 1e6) * SCAN_COST_OUT, 4)
-
-def est_book_cost(pages: int) -> float:
-    return round((pages * TOKENS_PER_PAGE_IMG / 1e6) * BOOK_COST_IN + (pages * TOKENS_PER_PAGE_TXT * 3 / 1e6) * BOOK_COST_OUT, 4)
+def est_cost(pages: int, full_ocr: bool = False) -> float:
+    """Estimate cost. full_ocr=True for book OCR (more output tokens)."""
+    txt_mult = 3 if full_ocr else 1
+    return round((pages * TOKENS_PER_PAGE_IMG / 1e6) * COST_IN + (pages * TOKENS_PER_PAGE_TXT * txt_mult / 1e6) * COST_OUT, 4)
 
 
 # =============================================================================
@@ -232,7 +228,7 @@ class ScanSession:
                 pdf_b64 = base64.b64encode(f.read()).decode()
             t0 = time.time()
             response = client.models.generate_content(
-                model=SCAN_MODEL,
+                model=MODEL,
                 contents=[{"role": "user", "parts": [
                     {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}},
                     {"text": CLASSIFY_PROMPT},
@@ -240,7 +236,7 @@ class ScanSession:
                 config={"max_output_tokens": 64000, "temperature": 0.1},
             )
             elapsed = time.time() - t0
-            cost = est_scan_cost(doc['page_count'])
+            cost = est_cost(doc['page_count'])
             self.session_cost += cost
 
             raw = response.text.strip()
@@ -318,7 +314,7 @@ class ScanSession:
             idx.append({
                 'doc_id': doc_id, 'category': cat, 'title': doc.get('title', ''),
                 'slug': slug, 'date': date_str, 'summary': doc.get('summary', ''),
-                'page_count': doc['page_count'], 'model': SCAN_MODEL,
+                'page_count': doc['page_count'], 'model': MODEL,
                 'processing_time': doc.get('processing_time', 0), 'cost': doc.get('cost', 0),
                 'pdf': os.path.relpath(final_pdf, self.output_dir),
                 'txt': os.path.relpath(doc['final_txt'], self.output_dir) if doc.get('final_txt') else None,
@@ -367,7 +363,7 @@ class BookOCRManager:
                 'id': job_id, 'filename': filename, 'file_path': file_path,
                 'page_count': page_count, 'status': 'pending',
                 'progress': 0, 'current_chunk': None, 'output_path': None, 'error': None,
-                'estimated_cost': est_book_cost(page_count),
+                'estimated_cost': est_cost(page_count, full_ocr=True),
                 'created_at': datetime.now().isoformat(),
             }
         return job_id
@@ -400,7 +396,7 @@ class BookOCRManager:
                 with self.lock:
                     self.jobs[job_id]['status'] = 'processing'
 
-                result = process_pdf(job['file_path'], output_path=out_path, progress_callback=progress_cb, model=BOOK_OCR_MODEL)
+                result = process_pdf(job['file_path'], output_path=out_path, progress_callback=progress_cb, model=MODEL)
 
                 with self.lock:
                     if job_id in self.jobs:
@@ -462,7 +458,7 @@ def api_health():
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("VITE_GEMINI_API_KEY")
     has_key = bool(api_key and len(api_key) > 10)
     return jsonify({
-        'has_api_key': has_key, 'scan_model': SCAN_MODEL, 'book_model': BOOK_OCR_MODEL,
+        'has_api_key': has_key, 'model': MODEL,
         'output_dir': app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR),
     })
 
@@ -532,7 +528,7 @@ def api_finish_scanning():
         'ok': True,
         'doc_count': len(scan_session.documents),
         'page_count': total_pages,
-        'estimated_cost': est_scan_cost(total_pages),
+        'estimated_cost': est_cost(total_pages),
     })
 
 
@@ -572,7 +568,7 @@ def api_upload_pdf():
     job_id = book_ocr.create_job(filename, file_path, page_count)
     return jsonify({
         'ok': True, 'job_id': job_id, 'filename': filename, 'page_count': page_count,
-        'classify_cost': est_scan_cost(page_count), 'book_cost': est_book_cost(page_count),
+        'classify_cost': est_cost(page_count), 'book_cost': est_cost(page_count, full_ocr=True),
     })
 
 
@@ -684,8 +680,7 @@ if __name__ == '__main__':
     print(f"\n  SCANDOC 9000")
     print(f"  ============")
     print(f"  Output:  {output_dir}")
-    print(f"  Scan:    {SCAN_MODEL}")
-    print(f"  Book:    {BOOK_OCR_MODEL}")
+    print(f"  Model:   {MODEL}")
     print(f"  Port:    {args.port}")
     print(f"  Open:    http://localhost:{args.port}")
     print()

@@ -163,9 +163,30 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
     <div class="flex gap-2 items-center">
       <button onclick="rotateImage()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm" title="Rotate 90°">↻ <span id="rotLabel">0°</span></button>
       <button id="btnMotion" onclick="toggleMotion()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">MOTION <span id="motionLabel">OFF</span></button>
+      <button onclick="toggleMotionSettings()" class="bg-surface-container-high border border-outline-variant px-2 py-2 text-outline hover:text-primary keycap-sm" title="Motion settings"><span class="material-symbols-outlined text-sm">settings</span></button>
       <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto bg-tertiary text-on-tertiary font-headline font-bold px-4 py-2 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
         FINISH
       </button>
+    </div>
+
+    <!-- Motion settings popover -->
+    <div id="motionSettings" class="hidden bg-surface-container-lowest border border-outline-variant p-4 hard-shadow">
+      <div class="flex justify-between items-center mb-3">
+        <span class="font-headline text-[10px] font-bold uppercase tracking-widest">Motion Settings</span>
+        <button onclick="toggleMotionSettings()" class="text-outline hover:text-on-surface"><span class="material-symbols-outlined text-sm">close</span></button>
+      </div>
+      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Sensitivity</label>
+      <input id="sensitivitySlider" type="range" min="1" max="10" value="5" class="w-full mb-0.5 accent-primary"/>
+      <div class="flex justify-between font-mono text-[9px] text-outline mb-3">
+        <span>Thick pages</span>
+        <span>Thin pages</span>
+      </div>
+      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Capture Delay</label>
+      <input id="delaySlider" type="range" min="0.3" max="3" step="0.1" value="1.0" class="w-full mb-0.5 accent-primary"/>
+      <div class="flex justify-between font-mono text-[9px] text-outline">
+        <span>Snap faster</span>
+        <span>More settling</span>
+      </div>
     </div>
 
     <!-- Upload zone -->
@@ -193,24 +214,20 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
       <span class="material-symbols-outlined text-sm text-outline" id="outputChevron">expand_more</span>
     </button>
 
-    <div id="outputPanel" class="hidden lg:flex flex-col p-3 md:p-6 gap-3 md:gap-4">
+    <div id="outputPanel" class="hidden lg:flex flex-col p-3 md:p-6 gap-3 md:gap-4 flex-1 overflow-y-auto">
 
-      <!-- Processing queue -->
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1">Processing</h2>
-      <div id="processingQueue" class="flex flex-col gap-2">
-        <div class="font-mono text-xs text-outline italic">No active jobs</div>
+      <!-- Processing queue (hidden until active) -->
+      <div id="processingSection" class="hidden">
+        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1">Processing</h2>
+        <div id="processingQueue" class="flex flex-col gap-2 mt-2"></div>
       </div>
 
-      <!-- Recent results -->
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mt-2">Recent Results</h2>
-      <div id="recentResults" class="flex flex-col gap-2">
-        <div class="font-mono text-xs text-outline italic">Scan or upload to get started</div>
+      <!-- Sidebar library (always visible) -->
+      <div class="flex justify-between items-center">
+        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Library</h2>
+        <button onclick="showView('library')" class="font-mono text-[10px] text-primary uppercase hover:underline">View All</button>
       </div>
-
-      <!-- View library link -->
-      <button onclick="showView('library')" class="mt-2 bg-surface text-on-surface font-mono text-xs uppercase tracking-widest px-4 py-2.5 border border-outline-variant hard-shadow keycap-sm flex items-center justify-center gap-2">
-        <span class="material-symbols-outlined text-sm">folder_open</span> VIEW FULL LIBRARY
-      </button>
+      <div id="sidebarLibrary" class="flex flex-col gap-2"></div>
     </div>
 
     <!-- Log area -->
@@ -266,27 +283,6 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
       <div id="outputStatus" class="font-mono text-[10px] text-outline mt-2"></div>
     </div>
 
-    <!-- Motion Detection -->
-    <div class="bg-surface-container-lowest p-5 border border-outline-variant hard-shadow">
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest border-b border-outline-variant pb-2 mb-4">Motion Detection</h2>
-
-      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Sensitivity</label>
-      <input id="sensitivitySlider" type="range" min="1" max="10" value="5" class="w-full mb-1 accent-primary"/>
-      <div class="flex justify-between font-mono text-[10px] text-outline mb-4">
-        <span>Less sensitive (thick pages)</span>
-        <span>More sensitive (thin pages)</span>
-      </div>
-      <p class="font-body text-xs text-on-surface-variant leading-relaxed mb-4">Controls how much movement triggers page-turn detection. Lower values ignore small movements (good for thick textbook pages). Higher values catch quick flips of thin paper.</p>
-
-      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Capture Delay</label>
-      <input id="delaySlider" type="range" min="0.3" max="3" step="0.1" value="1.0" class="w-full mb-1 accent-primary"/>
-      <div class="flex justify-between font-mono text-[10px] text-outline mb-2">
-        <span>Snap faster (0.3s)</span>
-        <span>More settling time (3.0s)</span>
-      </div>
-      <p class="font-body text-xs text-on-surface-variant leading-relaxed">How long the page must be completely still before auto-capture fires. Longer delays give more time for the page to flatten but slow down scanning speed.</p>
-    </div>
-
     <!-- Image Quality -->
     <div class="bg-lcd-bg p-5 border-2 border-outline-variant">
       <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-primary-container lcd-glow mb-3">Image Quality</h2>
@@ -319,8 +315,7 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
     <!-- About -->
     <div class="bg-surface-container p-5 border border-outline-variant font-mono text-[10px] text-outline uppercase tracking-wider leading-loose">
       <div class="font-bold text-on-surface text-sm mb-2 tracking-tighter">SCANDOC 9000</div>
-      Scan Model: Gemini 3.1 Flash-Lite<br/>
-      Book OCR Model: Gemini 3 Flash<br/>
+      Model: Gemini 3.1 Flash-Lite<br/>
       Output: ~/scandoc-output/<br/>
       Image: 1500px / JPEG 85
     </div>
@@ -615,31 +610,23 @@ async function pollStatus() {
 
     // Update processing queue
     const queue = document.getElementById('processingQueue');
+    const procSection = document.getElementById('processingSection');
     const active = (state.documents||[]).filter(d=>['queued','processing'].includes(d.status));
     if(active.length>0){
+      procSection.classList.remove('hidden');
       queue.innerHTML = active.map(d=>`
-        <div class="bg-surface-container-lowest p-3 border border-outline-variant">
+        <div class="bg-surface-container-lowest p-2.5 border border-outline-variant">
           <div class="flex justify-between items-center">
-            <span class="font-mono text-xs font-bold uppercase">${d.title||d.id}</span>
+            <span class="font-mono text-[11px] font-bold uppercase truncate">${d.title||d.id}</span>
             <span class="font-mono text-[10px] text-tertiary uppercase">${d.status}</span>
           </div>
-          <div class="font-mono text-[10px] text-outline">${d.pages||0}p</div>
+          <div class="font-mono text-[9px] text-outline">${d.pages||0}p</div>
         </div>`).join('');
-    } else { queue.innerHTML='<div class="font-mono text-xs text-outline italic">No active jobs</div>'; }
+    } else { procSection.classList.add('hidden'); }
 
-    // Update recent results
-    const results = document.getElementById('recentResults');
+    // Refresh sidebar library when docs complete
     const done = (state.documents||[]).filter(d=>['classified','filed'].includes(d.status));
-    if(done.length>0){
-      results.innerHTML = done.map(d=>`
-        <div class="bg-surface-container-lowest p-3 border border-outline-variant hard-shadow">
-          <div class="flex justify-between items-center mb-1">
-            <span class="font-mono text-xs font-bold uppercase truncate pr-2">${d.title||d.id}</span>
-            <span class="font-mono text-[10px] text-primary-container bg-primary/10 px-1.5 py-0.5 uppercase">${d.category||'...'}</span>
-          </div>
-          <div class="font-mono text-[10px] text-outline">${d.pages||0}p \u00B7 ${(d.processing_time||0).toFixed(1)}s \u00B7 $${(d.cost||0).toFixed(4)}</div>
-        </div>`).join('');
-    }
+    if(done.length>0) loadSidebarLibrary();
 
     // Update log
     if(state.process_log && state.process_log.length>0){
@@ -818,6 +805,45 @@ document.getElementById('delaySlider').addEventListener('input', function() {
     body:JSON.stringify({name:'stability_delay',value:parseFloat(this.value)})});
 });
 
+// ==================== MOTION SETTINGS POPOVER ====================
+function toggleMotionSettings() {
+  document.getElementById('motionSettings').classList.toggle('hidden');
+}
+
+// ==================== SIDEBAR LIBRARY ====================
+async function loadSidebarLibrary() {
+  const local = getLocalLibrary();
+  let serverScans = [];
+  try {
+    const res = await fetch('/api/library');
+    const data = await res.json();
+    serverScans = data.scans || [];
+  } catch(e) {}
+
+  const serverIds = new Set(serverScans.map(s => s.doc_id + '|' + s.title));
+  const merged = [...serverScans];
+  local.forEach(l => { if (!serverIds.has(l.doc_id + '|' + l.title)) merged.push(l); });
+  const items = merged.slice().reverse().slice(0, 20); // show latest 20
+
+  const el = document.getElementById('sidebarLibrary');
+  if (!el) return;
+  if (items.length === 0) {
+    el.innerHTML = '<div class="font-mono text-xs text-outline italic">No documents yet</div>';
+    return;
+  }
+  el.innerHTML = items.map(s => {
+    const hasPdf = s.pdf;
+    const pdfUrl = hasPdf ? '/api/file/' + encodeURIComponent(s.pdf) : null;
+    return `<div class="bg-surface-container-lowest p-2.5 border border-outline-variant flex justify-between items-center">
+      <div class="flex-1 min-w-0">
+        <div class="font-mono text-[11px] font-bold uppercase truncate">${s.title || 'Untitled'}</div>
+        <div class="font-mono text-[9px] text-outline uppercase">${s.category || 'misc'} \u00B7 ${s.date || ''} \u00B7 ${s.page_count || 0}p</div>
+      </div>
+      ${pdfUrl ? '<a href="' + pdfUrl + '" target="_blank" class="font-mono text-[9px] text-primary border border-primary px-1.5 py-0.5 uppercase ml-2 flex-shrink-0">PDF</a>' : ''}
+    </div>`;
+  }).join('');
+}
+
 // ==================== MOBILE OUTPUT TOGGLE ====================
 function toggleOutput() {
   const panel = document.getElementById('outputPanel');
@@ -885,6 +911,7 @@ async function checkHealth() {
 // ==================== INIT ====================
 checkHealth();
 loadOutputPath();
+loadSidebarLibrary();
 startCamera();
 refreshState();
 </script>
