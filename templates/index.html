@@ -205,26 +205,33 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
     <input type="file" id="photoInput" accept="image/*" capture="environment" multiple class="hidden"/>
   </div>
 
-  <!-- RIGHT: Output (sidebar on desktop, inline on mobile) -->
+  <!-- RIGHT: Output sidebar (always visible on desktop, collapsible on mobile) -->
   <div class="lg:w-1/2 xl:w-2/5 flex flex-col bg-surface-container-high lg:border-l border-t lg:border-t-0 border-outline-variant lg:overflow-y-auto">
 
-    <!-- Mobile: collapsible output toggle -->
+    <!-- Mobile: collapsible toggle -->
     <button id="outputToggle" onclick="toggleOutput()" class="lg:hidden flex items-center justify-between px-3 py-2 bg-surface-container-high border-b border-outline-variant">
-      <span class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Results <span id="outputBadge" class="text-primary-container"></span></span>
+      <span class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Library <span id="outputBadge" class="text-primary-container"></span></span>
       <span class="material-symbols-outlined text-sm text-outline" id="outputChevron">expand_more</span>
     </button>
 
-    <div id="outputPanel" class="hidden lg:flex flex-col p-3 md:p-6 gap-3 md:gap-4 flex-1 overflow-y-auto">
+    <!-- Desktop: always visible. Mobile: toggle -->
+    <div id="outputPanel" class="flex flex-col p-3 md:p-6 gap-3 md:gap-4 flex-1 overflow-y-auto max-lg:hidden">
 
-      <!-- Processing queue (hidden until active) -->
+      <!-- Processing queue (appears when jobs are active) -->
       <div id="processingSection" class="hidden">
-        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1">Processing</h2>
+        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-tertiary border-b border-outline-variant pb-1">Processing</h2>
         <div id="processingQueue" class="flex flex-col gap-2 mt-2"></div>
       </div>
 
-      <!-- Sidebar library (always visible) -->
+      <!-- Book OCR jobs (shown if any exist) -->
+      <div id="sidebarBookOcr" class="hidden">
+        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1">Book OCR Jobs</h2>
+        <div id="sidebarBookList" class="flex flex-col gap-2 mt-2"></div>
+      </div>
+
+      <!-- Recent documents -->
       <div class="flex justify-between items-center">
-        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Library</h2>
+        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Documents</h2>
         <button onclick="showView('library')" class="font-mono text-[10px] text-primary uppercase hover:underline">View All</button>
       </div>
       <div id="sidebarLibrary" class="flex flex-col gap-2"></div>
@@ -580,6 +587,7 @@ async function handlePdf(file) {
   zone.innerHTML = origHTML; // restore
   if(!data.ok) return;
   pendingPdfFile = data;
+  console.log('PDF uploaded, showing modal:', data);
   document.getElementById('pdfChoiceTitle').textContent = data.filename;
 
   const qs = data.quick_scan || {};
@@ -894,22 +902,60 @@ function toggleMotionSettings() {
 // ==================== SIDEBAR LIBRARY ====================
 async function loadSidebarLibrary() {
   const local = getLocalLibrary();
-  let serverScans = [];
+  let serverScans = [], serverBooks = [];
   try {
     const res = await fetch('/api/library');
     const data = await res.json();
     serverScans = data.scans || [];
+    serverBooks = data.books || [];
   } catch(e) {}
 
+  // Book OCR jobs in sidebar
+  const bookSection = document.getElementById('sidebarBookOcr');
+  const bookList = document.getElementById('sidebarBookList');
+  if (serverBooks.length > 0) {
+    bookSection.classList.remove('hidden');
+    bookList.innerHTML = serverBooks.map(b => {
+      let status = '', action = '';
+      if (b.status === 'pending') {
+        status = '<span class="text-outline">PENDING</span>';
+        action = `<button onclick="fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:'${b.id}'})}).then(()=>{startBookPolling('${b.id}');loadSidebarLibrary();})" class="font-mono text-[9px] bg-primary text-on-primary px-2 py-0.5 uppercase keycap-sm">START ~$${(b.estimated_cost||0).toFixed(3)}</button>`;
+      } else if (b.status === 'processing') {
+        status = '<span class="text-tertiary">' + (b.progress||0) + '%</span>';
+        action = '<div class="w-full h-1 bg-surface-dim rounded-full mt-1"><div class="h-full bg-primary-container rounded-full" style="width:' + (b.progress||0) + '%"></div></div>';
+      } else if (b.status === 'complete') {
+        status = '<span class="text-primary-container">DONE</span>';
+        action = '<a href="/api/book-download/' + b.id + '" class="font-mono text-[9px] text-primary border border-primary px-1.5 py-0.5 uppercase">.MD</a>';
+      } else if (b.status === 'error') {
+        status = '<span class="text-error">ERROR</span>';
+      }
+      return `<div class="bg-surface-container-lowest p-2.5 border border-outline-variant">
+        <div class="flex justify-between items-center">
+          <div class="font-mono text-[11px] font-bold uppercase truncate flex-1">${b.filename||''}</div>
+          <span class="font-mono text-[9px] ml-2">${status}</span>
+        </div>
+        <div class="font-mono text-[9px] text-outline">${b.page_count||0}p</div>
+        ${action}
+      </div>`;
+    }).join('');
+  } else {
+    bookSection.classList.add('hidden');
+  }
+
+  // Scanned documents in sidebar
   const serverIds = new Set(serverScans.map(s => s.doc_id + '|' + s.title));
   const merged = [...serverScans];
   local.forEach(l => { if (!serverIds.has(l.doc_id + '|' + l.title)) merged.push(l); });
-  const items = merged.slice().reverse().slice(0, 20); // show latest 20
+  const items = merged.slice().reverse().slice(0, 20);
 
   const el = document.getElementById('sidebarLibrary');
   if (!el) return;
+  if (items.length === 0 && serverBooks.length === 0) {
+    el.innerHTML = '<div class="font-mono text-xs text-outline italic">Drop a PDF or scan to get started</div>';
+    return;
+  }
   if (items.length === 0) {
-    el.innerHTML = '<div class="font-mono text-xs text-outline italic">No documents yet</div>';
+    el.innerHTML = '';
     return;
   }
   el.innerHTML = items.map(s => {
@@ -929,8 +975,8 @@ async function loadSidebarLibrary() {
 function toggleOutput() {
   const panel = document.getElementById('outputPanel');
   const chevron = document.getElementById('outputChevron');
-  panel.classList.toggle('hidden');
-  chevron.textContent = panel.classList.contains('hidden') ? 'expand_more' : 'expand_less';
+  panel.classList.toggle('max-lg:hidden');
+  chevron.textContent = panel.classList.contains('max-lg:hidden') ? 'expand_more' : 'expand_less';
 }
 
 // Auto-expand output panel when results come in (mobile)
