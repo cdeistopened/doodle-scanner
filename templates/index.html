@@ -78,13 +78,12 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
 <!-- ======================== LCD HEADER ======================== -->
 <header class="fixed top-0 w-full z-50 flex justify-between items-center px-4 md:px-6 h-12 bg-lcd-bg border-b-4 border-on-surface">
   <div class="flex items-center gap-3">
-    <span class="font-headline uppercase tracking-widest text-sm font-bold text-primary-container lcd-glow cursor-pointer" onclick="showView('scanner')">SCANDOC 9000</span>
+    <span class="font-headline uppercase tracking-widest text-sm font-bold text-primary-container lcd-glow cursor-pointer" onclick="showView('scanner')">SCANDOC 9000 v2</span>
   </div>
   <div class="flex items-center gap-1">
     <span id="headerStatus" class="font-headline text-xs text-primary-container lcd-glow tracking-wider mr-3">READY</span>
     <span id="headerCost" class="font-headline text-xs text-outline tracking-wider mr-3"></span>
     <button onclick="showView('scanner')" class="p-1.5 text-primary-container hover:bg-primary/20 rounded-sm" title="Scanner"><span class="material-symbols-outlined text-lg">barcode_scanner</span></button>
-    <button onclick="showView('library')" class="p-1.5 text-outline hover:bg-primary/20 rounded-sm" title="Library"><span class="material-symbols-outlined text-lg">folder_open</span></button>
     <button onclick="showView('settings')" class="p-1.5 text-outline hover:bg-primary/20 rounded-sm" title="Settings"><span class="material-symbols-outlined text-lg">settings</span></button>
   </div>
 </header>
@@ -205,72 +204,37 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
     <input type="file" id="photoInput" accept="image/*" capture="environment" multiple class="hidden"/>
   </div>
 
-  <!-- RIGHT: Output sidebar (always visible on desktop, collapsible on mobile) -->
-  <div class="lg:w-1/2 xl:w-2/5 flex flex-col bg-surface-container-high lg:border-l border-t lg:border-t-0 border-outline-variant lg:overflow-y-auto">
+  <!-- RIGHT: Jobs Panel (always visible, no toggle, no hidden) -->
+  <div class="lg:w-2/5 bg-surface-container-high lg:border-l border-t lg:border-t-0 border-outline-variant p-4 lg:overflow-y-auto flex flex-col gap-4">
 
-    <!-- Mobile: collapsible toggle -->
-    <button id="outputToggle" onclick="toggleOutput()" class="lg:hidden flex items-center justify-between px-3 py-2 bg-surface-container-high border-b border-outline-variant">
-      <span class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Library <span id="outputBadge" class="text-primary-container"></span></span>
-      <span class="material-symbols-outlined text-sm text-outline" id="outputChevron">expand_more</span>
-    </button>
-
-    <!-- Desktop: always visible. Mobile: toggle -->
-    <div id="outputPanel" class="flex flex-col p-3 md:p-6 gap-3 md:gap-4 flex-1 overflow-y-auto max-lg:hidden">
-
-      <!-- Processing queue (appears when jobs are active) -->
-      <div id="processingSection" class="hidden">
-        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-tertiary border-b border-outline-variant pb-1">Processing</h2>
-        <div id="processingQueue" class="flex flex-col gap-2 mt-2"></div>
+    <!-- Active Job (shown when a job is running) -->
+    <div id="activeJob" style="display:none;">
+      <div class="bg-lcd-bg p-4 border-2 border-outline-variant">
+        <div class="flex justify-between items-start">
+          <div id="jobFilename" class="font-headline text-sm font-bold text-primary-container lcd-glow uppercase truncate"></div>
+          <span id="jobStatusBadge" class="font-mono text-[10px] text-primary-container/70 uppercase ml-2 flex-shrink-0"></span>
+        </div>
+        <div class="h-2 bg-black/30 rounded-full mt-3 overflow-hidden">
+          <div id="jobProgressBar" class="h-full bg-primary-container rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <div id="jobDetail" class="font-mono text-[10px] text-primary-container/50 mt-2"></div>
       </div>
-
-      <!-- Book OCR jobs (shown if any exist) -->
-      <div id="sidebarBookOcr" class="hidden">
-        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1">Book OCR Jobs</h2>
-        <div id="sidebarBookList" class="flex flex-col gap-2 mt-2"></div>
+      <div id="jobResult" style="display:none;" class="mt-3 bg-surface-container-lowest p-3 border border-outline-variant hard-shadow">
+        <div class="font-headline text-xs font-bold uppercase text-primary mb-2">COMPLETE</div>
+        <div id="jobResultLinks" class="flex gap-2 flex-wrap"></div>
       </div>
+    </div>
 
-      <!-- Recent documents -->
-      <div class="flex justify-between items-center">
-        <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline">Documents</h2>
-        <button onclick="showView('library')" class="font-mono text-[10px] text-primary uppercase hover:underline">View All</button>
+    <!-- Job History -->
+    <div>
+      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mb-2">Jobs</h2>
+      <div id="jobList" class="flex flex-col gap-2">
+        <div class="font-mono text-xs text-outline italic">Drop a PDF or scan to get started</div>
       </div>
-      <div id="sidebarLibrary" class="flex flex-col gap-2"></div>
     </div>
 
     <!-- Log area -->
-    <div class="border-t border-outline-variant">
-      <div id="logArea" class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container/70 max-h-32 lg:max-h-40 overflow-y-auto leading-relaxed hidden">
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ======================== LIBRARY VIEW ======================== -->
-<div id="viewLibrary" class="view flex-1 pt-12 pb-16 lg:pb-0 flex-col p-4 md:p-8 overflow-y-auto">
-  <div class="max-w-6xl mx-auto w-full">
-    <div class="flex justify-between items-center mb-4">
-      <div>
-        <h1 class="font-headline text-2xl font-bold uppercase tracking-tighter">Archive</h1>
-        <p id="libraryStats" class="font-mono text-xs text-outline uppercase tracking-wider"></p>
-      </div>
-      <div class="relative">
-        <input id="librarySearch" type="text" placeholder="SEARCH..." class="bg-surface-container-lowest border border-outline-variant font-mono text-xs uppercase px-8 py-2 w-48 focus:ring-1 focus:ring-primary"/>
-        <span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-outline text-sm">search</span>
-      </div>
-    </div>
-
-    <!-- Filter pills -->
-    <div id="filterPills" class="flex gap-2 flex-wrap mb-6"></div>
-
-    <!-- Book OCR results -->
-    <div id="bookOcrSection" class="mb-6 hidden">
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mb-3">Book OCR</h2>
-      <div id="bookOcrList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-    </div>
-
-    <!-- Scanned documents -->
-    <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mb-3">Documents</h2>
-    <div id="libraryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
+    <div id="logArea" class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container/70 max-h-40 overflow-y-auto leading-relaxed" style="display:none;"></div>
   </div>
 </div>
 
@@ -373,10 +337,6 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
 
 <!-- ======================== MOBILE BOTTOM NAV ======================== -->
 <nav class="lg:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-stretch h-14 bg-surface-container-high border-t-2 border-on-surface">
-  <button onclick="showView('library')" class="nav-tab flex flex-col items-center justify-center flex-1 text-outline" data-view="library">
-    <span class="material-symbols-outlined text-lg">folder_open</span>
-    <span class="font-headline text-[9px] font-bold uppercase mt-0.5">Library</span>
-  </button>
   <button onclick="showView('scanner')" class="nav-tab flex flex-col items-center justify-center flex-1 bg-primary-container text-on-primary-container -translate-y-0.5 shadow-[0_2px_0_0_#1e1c10]" data-view="scanner">
     <span class="material-symbols-outlined text-lg" style="font-variation-settings:'FILL' 1;">barcode_scanner</span>
     <span class="font-headline text-[9px] font-bold uppercase mt-0.5">Scan</span>
@@ -419,7 +379,6 @@ function showView(name) {
   });
   // Update header icons
   document.querySelectorAll('header button').forEach(b => b.querySelector('.material-symbols-outlined').classList.remove('text-primary-container'));
-  if (name === 'library') loadLibrary();
 }
 
 // ==================== CAMERA ====================
@@ -624,57 +583,98 @@ async function handlePdf(file) {
 }
 
 async function startClassify() {
+  const pf = pendingPdfFile;
   closePdfChoice();
-  if(!pendingPdfFile) return;
+  if(!pf) return;
+  // Show active job panel immediately
+  showActiveJob(pf.filename, 'CLASSIFYING...');
   document.getElementById('headerStatus').textContent = 'CLASSIFYING...';
-  await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pendingPdfFile.job_id})});
+  await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
   showLog(); startPolling();
 }
 
 async function startBookOcr() {
+  const pf = pendingPdfFile;
   closePdfChoice();
-  if(!pendingPdfFile) return;
+  if(!pf) return;
+  // Show active job panel immediately
+  showActiveJob(pf.filename, 'STARTING BOOK OCR...');
   document.getElementById('headerStatus').textContent = 'BOOK OCR STARTING...';
-  await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pendingPdfFile.job_id})});
-  startBookPolling(pendingPdfFile.job_id);
+  // Start immediately — no pending state
+  await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
+  pollBookJob(pf.job_id);
 }
 
 function closePdfChoice() { document.getElementById('pdfChoice').classList.add('hidden'); pendingPdfFile=null; }
 
-// Book OCR dedicated poller — shows chunk-level progress
-async function startBookPolling(jobId) {
-  showLog();
+// ==================== JOB PANEL ====================
+function showActiveJob(filename, status) {
+  const el = document.getElementById('activeJob');
+  el.style.display = 'block';
+  document.getElementById('jobFilename').textContent = filename;
+  document.getElementById('jobStatusBadge').textContent = status;
+  document.getElementById('jobProgressBar').style.width = '0%';
+  document.getElementById('jobDetail').textContent = '';
+  document.getElementById('jobResult').style.display = 'none';
+}
+
+function updateJobProgress(pct, detail, status) {
+  document.getElementById('jobProgressBar').style.width = pct + '%';
+  document.getElementById('jobDetail').textContent = detail || '';
+  if (status) document.getElementById('jobStatusBadge').textContent = status;
+}
+
+function showJobComplete(links) {
+  document.getElementById('jobStatusBadge').textContent = 'COMPLETE';
+  document.getElementById('jobProgressBar').style.width = '100%';
+  const result = document.getElementById('jobResult');
+  result.style.display = 'block';
+  document.getElementById('jobResultLinks').innerHTML = links;
+  // Add to job history
+  addToJobHistory(document.getElementById('jobFilename').textContent, 'complete', links);
+}
+
+function addToJobHistory(filename, status, links) {
+  const list = document.getElementById('jobList');
+  // Remove "no jobs" placeholder
+  if (list.querySelector('.italic')) list.innerHTML = '';
+  const item = document.createElement('div');
+  item.className = 'bg-surface-container-lowest p-2.5 border border-outline-variant';
+  item.innerHTML = '<div class="flex justify-between items-center"><span class="font-mono text-[11px] font-bold uppercase truncate">' + filename + '</span><span class="font-mono text-[9px] text-primary-container uppercase">' + status + '</span></div>' + (links ? '<div class="flex gap-2 mt-1">' + links + '</div>' : '');
+  list.prepend(item);
+}
+
+// Book OCR poller — updates the job panel in real time
+async function pollBookJob(jobId) {
+  const log = document.getElementById('logArea');
+  log.style.display = 'block';
+
   async function poll() {
     try {
       const res = await fetch('/api/book-status/' + jobId);
       const job = await res.json();
 
-      // Update header
       if (job.status === 'processing') {
         const pct = job.progress || 0;
         const chunk = job.current_chunk || 'Analyzing document...';
-        document.getElementById('headerStatus').textContent = 'BOOK OCR ' + pct + '% — ' + chunk;
-        // Update log
-        const log = document.getElementById('logArea');
-        log.classList.remove('hidden');
-        log.textContent = (log.textContent ? log.textContent + '\n' : '') + '[Book OCR] ' + chunk + ' (' + pct + '%)';
+        updateJobProgress(pct, chunk, 'PROCESSING ' + pct + '%');
+        document.getElementById('headerStatus').textContent = 'BOOK OCR ' + pct + '%';
+        log.textContent += '\n[' + pct + '%] ' + chunk;
         log.scrollTop = log.scrollHeight;
         setTimeout(poll, 2000);
       } else if (job.status === 'complete') {
-        document.getElementById('headerStatus').textContent = 'BOOK OCR COMPLETE';
-        const log = document.getElementById('logArea');
-        log.textContent += '\n[Book OCR] Done! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
-        loadSidebarLibrary();
+        document.getElementById('headerStatus').textContent = 'COMPLETE';
+        const links = '<a href="/api/book-download/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">.MD</a>';
+        showJobComplete(links);
+        log.textContent += '\nDone! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
       } else if (job.status === 'error') {
-        document.getElementById('headerStatus').textContent = 'BOOK OCR ERROR';
-        const log = document.getElementById('logArea');
-        log.textContent += '\n[Book OCR] Error: ' + (job.error || 'Unknown');
+        document.getElementById('headerStatus').textContent = 'ERROR';
+        updateJobProgress(0, 'Error: ' + (job.error || 'Unknown'), 'ERROR');
       } else {
-        // Still pending/starting
-        document.getElementById('headerStatus').textContent = 'BOOK OCR STARTING...';
+        updateJobProgress(0, 'Starting...', 'STARTING');
         setTimeout(poll, 1000);
       }
-    } catch(e) { console.error('Book poll error:', e); }
+    } catch(e) { console.error('Poll error:', e); }
   }
   poll();
 }
@@ -686,51 +686,43 @@ async function pollStatus() {
   try {
     const res = await fetch('/api/state');
     const state = await res.json();
-    // Update header
     if(state.session_cost>0) document.getElementById('headerCost').textContent='$'+state.session_cost.toFixed(3);
     document.getElementById('sessionCost').textContent=state.session_cost.toFixed(3);
     document.getElementById('docNum').textContent=state.current_doc?state.current_doc.replace('doc_',''):'1';
     document.getElementById('doneDocs').textContent=state.completed_docs||0;
 
-    // Update processing queue
-    const queue = document.getElementById('processingQueue');
-    const procSection = document.getElementById('processingSection');
     const active = (state.documents||[]).filter(d=>['queued','processing'].includes(d.status));
-    if(active.length>0){
-      procSection.classList.remove('hidden');
-      queue.innerHTML = active.map(d=>`
-        <div class="bg-surface-container-lowest p-2.5 border border-outline-variant">
-          <div class="flex justify-between items-center">
-            <span class="font-mono text-[11px] font-bold uppercase truncate">${d.title||d.id}</span>
-            <span class="font-mono text-[10px] text-tertiary uppercase">${d.status}</span>
-          </div>
-          <div class="font-mono text-[9px] text-outline">${d.pages||0}p</div>
-        </div>`).join('');
-    } else { procSection.classList.add('hidden'); }
-
-    // Refresh sidebar library when docs complete
     const done = (state.documents||[]).filter(d=>['classified','filed'].includes(d.status));
-    if(done.length>0) loadSidebarLibrary();
+
+    // Update active job panel for classify jobs
+    if (active.length > 0) {
+      const d = active[0];
+      showActiveJob(d.title || d.id, d.status.toUpperCase());
+      updateJobProgress(0, d.status + '...', d.status.toUpperCase());
+    }
+
+    // When classify jobs complete, show result
+    done.forEach(d => {
+      if (!d._shown) {
+        d._shown = true;
+        showJobComplete('<span class="font-mono text-[10px]">' + (d.category||'misc') + ' / ' + (d.title||d.id) + '</span>');
+      }
+    });
 
     // Update log
     if(state.process_log && state.process_log.length>0){
       const log = document.getElementById('logArea');
+      log.style.display = 'block';
       log.textContent = state.process_log.join('\n');
       log.scrollTop = log.scrollHeight;
     }
 
-    // Save completed docs to localStorage
     syncResultsToLocal(state.documents);
 
-    // Update mobile output badge
-    updateOutputBadge(done.length + active.length);
-
-    // Keep polling if active
     const hasActive = active.length>0 || (state.documents||[]).some(d=>d.status==='queued');
     if(hasActive) setTimeout(pollStatus,1000); else {
       polling=false;
       refreshState();
-      loadSidebarLibrary(); // refresh library when all jobs done
       document.getElementById('headerStatus').textContent = 'READY';
     }
   } catch(e) { polling=false; }
@@ -772,9 +764,9 @@ function saveToLocalLibrary(doc) {
 }
 
 function clearLocalLibrary() {
-  if (confirm('Clear all library history from this browser?')) {
+  if (confirm('Clear all job history from this browser?')) {
     localStorage.removeItem(LIBRARY_KEY);
-    loadLibrary();
+    document.getElementById('jobList').innerHTML = '<div class="font-mono text-xs text-outline italic">No jobs yet</div>';
   }
 }
 
@@ -790,93 +782,6 @@ function syncResultsToLocal(documents) {
     });
   });
 }
-
-async function loadLibrary() {
-  // Merge: localStorage (always) + server /api/library (if available, for local file links)
-  const local = getLocalLibrary();
-  let serverScans = [], serverBooks = [];
-
-  try {
-    const res = await fetch('/api/library');
-    const data = await res.json();
-    serverScans = data.scans || [];
-    serverBooks = data.books || [];
-  } catch(e) { /* server library unavailable — use local only */ }
-
-  // Merge: prefer server entries (they have file paths), supplement with local-only entries
-  const serverIds = new Set(serverScans.map(s => s.doc_id + '|' + s.title));
-  const merged = [...serverScans];
-  local.forEach(l => {
-    if (!serverIds.has(l.doc_id + '|' + l.title)) merged.push(l);
-  });
-
-  const totalDocs = merged.length;
-  const totalPages = merged.reduce((a, s) => a + (s.page_count || 0), 0);
-  const totalCost = merged.reduce((a, s) => a + (s.cost || 0), 0);
-
-  // Categories
-  const categories = {};
-  merged.forEach(s => { const c = s.category || 'misc'; categories[c] = (categories[c]||0) + 1; });
-
-  document.getElementById('libraryStats').textContent =
-    totalDocs+' docs \u00B7 '+totalPages+' pages \u00B7 $'+totalCost.toFixed(3);
-
-  // Filter pills
-  const cats = Object.entries(categories).sort((a,b)=>b[1]-a[1]);
-  document.getElementById('filterPills').innerHTML =
-    '<button onclick="setFilter(\'all\')" class="font-mono text-[10px] px-3 py-1 uppercase rounded-full border keycap-sm '+(currentFilter==='all'?'bg-primary text-on-primary border-on-surface':'bg-surface text-on-surface-variant border-outline-variant')+'">ALL '+totalDocs+'</button>'+
-    cats.map(([c,n])=>'<button onclick="setFilter(\''+c+'\')" class="font-mono text-[10px] px-3 py-1 uppercase rounded-full border keycap-sm '+(currentFilter===c?'bg-primary text-on-primary border-on-surface':'bg-surface text-on-surface-variant border-outline-variant')+'">'+c+' '+n+'</button>').join('');
-
-  // Filter + search
-  let scans = merged;
-  if(currentFilter!=='all') scans = scans.filter(s=>s.category===currentFilter);
-  scans = scans.slice().reverse();
-  const q = (document.getElementById('librarySearch').value||'').toLowerCase();
-  if(q) scans = scans.filter(s=>(s.title||'').toLowerCase().includes(q)||(s.category||'').includes(q));
-
-  document.getElementById('libraryGrid').innerHTML = scans.map(s=>{
-    const hasPdf = s.pdf;
-    const hasTxt = s.txt;
-    const pdfUrl = hasPdf ? '/api/file/'+encodeURIComponent(s.pdf) : null;
-    const txtUrl = hasTxt ? '/api/file/'+encodeURIComponent(s.txt) : null;
-    return `<div class="bg-surface-container-lowest border border-outline-variant hard-shadow flex flex-col hover:-translate-y-0.5 transition-transform">
-      <div class="h-32 bg-surface-container-high flex items-center justify-center relative border-b border-outline-variant">
-        <span class="material-symbols-outlined text-4xl text-outline/30">description</span>
-        <span class="absolute top-1.5 right-1.5 font-mono text-[9px] uppercase bg-primary-container text-on-primary-container px-1.5 py-0.5">${s.category||'misc'}</span>
-      </div>
-      <div class="p-3 flex flex-col gap-1">
-        <div class="font-mono text-xs font-bold uppercase truncate">${s.title||'Untitled'}</div>
-        <div class="font-mono text-[10px] text-outline uppercase">${s.date||''} \u00B7 ${s.page_count||0}p</div>
-        <div class="flex gap-2 mt-1">
-          ${pdfUrl?'<a href="'+pdfUrl+'" target="_blank" class="font-mono text-[10px] uppercase text-primary border border-primary px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors">PDF</a>':''}
-          ${txtUrl?'<a href="'+txtUrl+'" target="_blank" class="font-mono text-[10px] uppercase text-primary border border-primary px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors">TEXT</a>':''}
-          ${!pdfUrl&&!txtUrl?'<span class="font-mono text-[10px] text-outline italic">local only</span>':''}
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-
-  // Book OCR section
-  const books = serverBooks;
-  const bookSection = document.getElementById('bookOcrSection');
-  if(books.length>0){
-    bookSection.classList.remove('hidden');
-    document.getElementById('bookOcrList').innerHTML = books.map(b=>{
-      let extra='';
-      if(b.status==='pending') extra=`<button onclick="fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:'${b.id}'})}).then(()=>loadLibrary())" class="font-mono text-[10px] bg-primary text-on-primary px-2 py-1 uppercase keycap-sm">START ~$${(b.estimated_cost||0).toFixed(3)}</button>`;
-      if(b.status==='processing') extra=`<div class="w-full h-1.5 bg-surface-dim rounded-full mt-1"><div class="h-full bg-primary-container rounded-full" style="width:${b.progress||0}%"></div></div><div class="font-mono text-[10px] text-outline mt-1">${b.current_chunk||''} ${b.progress||0}%</div>`;
-      if(b.status==='complete') extra=`<div class="flex gap-2 mt-1"><a href="/api/book-download/${b.id}" class="font-mono text-[10px] uppercase text-primary border border-primary px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors">.MD</a></div>`;
-      return `<div class="bg-surface-container-lowest border border-outline-variant hard-shadow p-3">
-        <div class="font-mono text-xs font-bold uppercase truncate">${b.filename||''}</div>
-        <div class="font-mono text-[10px] text-outline uppercase">${b.page_count||0}p \u00B7 ${b.status}</div>
-        ${extra}
-      </div>`;
-    }).join('');
-  } else { bookSection.classList.add('hidden'); }
-}
-
-function setFilter(cat) { currentFilter=cat; loadLibrary(); }
-document.getElementById('librarySearch').addEventListener('input', ()=>loadLibrary());
 
 // ==================== SETTINGS ====================
 document.getElementById('sensitivitySlider').addEventListener('input', function() {
@@ -894,102 +799,8 @@ document.getElementById('delaySlider').addEventListener('input', function() {
     body:JSON.stringify({name:'stability_delay',value:parseFloat(this.value)})});
 });
 
-// ==================== MOTION SETTINGS POPOVER ====================
 function toggleMotionSettings() {
   document.getElementById('motionSettings').classList.toggle('hidden');
-}
-
-// ==================== SIDEBAR LIBRARY ====================
-async function loadSidebarLibrary() {
-  const local = getLocalLibrary();
-  let serverScans = [], serverBooks = [];
-  try {
-    const res = await fetch('/api/library');
-    const data = await res.json();
-    serverScans = data.scans || [];
-    serverBooks = data.books || [];
-  } catch(e) {}
-
-  // Book OCR jobs in sidebar
-  const bookSection = document.getElementById('sidebarBookOcr');
-  const bookList = document.getElementById('sidebarBookList');
-  if (serverBooks.length > 0) {
-    bookSection.classList.remove('hidden');
-    bookList.innerHTML = serverBooks.map(b => {
-      let status = '', action = '';
-      if (b.status === 'pending') {
-        status = '<span class="text-outline">PENDING</span>';
-        action = `<button onclick="fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:'${b.id}'})}).then(()=>{startBookPolling('${b.id}');loadSidebarLibrary();})" class="font-mono text-[9px] bg-primary text-on-primary px-2 py-0.5 uppercase keycap-sm">START ~$${(b.estimated_cost||0).toFixed(3)}</button>`;
-      } else if (b.status === 'processing') {
-        status = '<span class="text-tertiary">' + (b.progress||0) + '%</span>';
-        action = '<div class="w-full h-1 bg-surface-dim rounded-full mt-1"><div class="h-full bg-primary-container rounded-full" style="width:' + (b.progress||0) + '%"></div></div>';
-      } else if (b.status === 'complete') {
-        status = '<span class="text-primary-container">DONE</span>';
-        action = '<a href="/api/book-download/' + b.id + '" class="font-mono text-[9px] text-primary border border-primary px-1.5 py-0.5 uppercase">.MD</a>';
-      } else if (b.status === 'error') {
-        status = '<span class="text-error">ERROR</span>';
-      }
-      return `<div class="bg-surface-container-lowest p-2.5 border border-outline-variant">
-        <div class="flex justify-between items-center">
-          <div class="font-mono text-[11px] font-bold uppercase truncate flex-1">${b.filename||''}</div>
-          <span class="font-mono text-[9px] ml-2">${status}</span>
-        </div>
-        <div class="font-mono text-[9px] text-outline">${b.page_count||0}p</div>
-        ${action}
-      </div>`;
-    }).join('');
-  } else {
-    bookSection.classList.add('hidden');
-  }
-
-  // Scanned documents in sidebar
-  const serverIds = new Set(serverScans.map(s => s.doc_id + '|' + s.title));
-  const merged = [...serverScans];
-  local.forEach(l => { if (!serverIds.has(l.doc_id + '|' + l.title)) merged.push(l); });
-  const items = merged.slice().reverse().slice(0, 20);
-
-  const el = document.getElementById('sidebarLibrary');
-  if (!el) return;
-  if (items.length === 0 && serverBooks.length === 0) {
-    el.innerHTML = '<div class="font-mono text-xs text-outline italic">Drop a PDF or scan to get started</div>';
-    return;
-  }
-  if (items.length === 0) {
-    el.innerHTML = '';
-    return;
-  }
-  el.innerHTML = items.map(s => {
-    const hasPdf = s.pdf;
-    const pdfUrl = hasPdf ? '/api/file/' + encodeURIComponent(s.pdf) : null;
-    return `<div class="bg-surface-container-lowest p-2.5 border border-outline-variant flex justify-between items-center">
-      <div class="flex-1 min-w-0">
-        <div class="font-mono text-[11px] font-bold uppercase truncate">${s.title || 'Untitled'}</div>
-        <div class="font-mono text-[9px] text-outline uppercase">${s.category || 'misc'} \u00B7 ${s.date || ''} \u00B7 ${s.page_count || 0}p</div>
-      </div>
-      ${pdfUrl ? '<a href="' + pdfUrl + '" target="_blank" class="font-mono text-[9px] text-primary border border-primary px-1.5 py-0.5 uppercase ml-2 flex-shrink-0">PDF</a>' : ''}
-    </div>`;
-  }).join('');
-}
-
-// ==================== MOBILE OUTPUT TOGGLE ====================
-function toggleOutput() {
-  const panel = document.getElementById('outputPanel');
-  const chevron = document.getElementById('outputChevron');
-  panel.classList.toggle('max-lg:hidden');
-  chevron.textContent = panel.classList.contains('max-lg:hidden') ? 'expand_more' : 'expand_less';
-}
-
-// Auto-expand output panel when results come in (mobile)
-function updateOutputBadge(count) {
-  const badge = document.getElementById('outputBadge');
-  if (badge && count > 0) {
-    badge.textContent = '(' + count + ')';
-    // Auto-expand on first result
-    const panel = document.getElementById('outputPanel');
-    if (panel && panel.classList.contains('hidden') && window.innerWidth < 1024) {
-      toggleOutput();
-    }
-  }
 }
 
 // ==================== OUTPUT PATH ====================
@@ -1035,12 +846,26 @@ async function checkHealth() {
   } catch(e) {}
 }
 
+// ==================== JOB HISTORY (load from localStorage + server) ====================
+async function loadJobHistory() {
+  const local = getLocalLibrary();
+  const list = document.getElementById('jobList');
+  if (local.length === 0) return;
+  list.innerHTML = '';
+  local.slice().reverse().slice(0, 15).forEach(s => {
+    const pdfUrl = s.pdf ? '/api/file/' + encodeURIComponent(s.pdf) : null;
+    const links = pdfUrl ? '<a href="' + pdfUrl + '" target="_blank" class="font-mono text-[9px] text-primary border border-primary px-1.5 py-0.5 uppercase">PDF</a>' : '';
+    addToJobHistory((s.title || 'Untitled') + ' [' + (s.category || '') + ']', 'done', links);
+  });
+}
+
 // ==================== INIT ====================
 checkHealth();
 loadOutputPath();
-loadSidebarLibrary();
 startCamera();
 refreshState();
+// Load existing jobs into history on page load
+loadJobHistory();
 </script>
 </body>
 </html>
