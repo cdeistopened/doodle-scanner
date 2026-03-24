@@ -348,13 +348,15 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
       <div id="preflightContent"></div>
     </div>
 
-    <div class="flex gap-3">
-      <button onclick="startClassify()" class="flex-1 bg-primary text-on-primary font-headline font-bold py-4 text-xs uppercase tracking-widest keycap flex flex-col items-center gap-1">
+    <div class="flex flex-col gap-3">
+      <button onclick="startClassify()" class="w-full bg-primary text-on-primary font-headline font-bold py-4 text-xs uppercase tracking-widest keycap flex flex-col items-center gap-1">
         <span>CLASSIFY & FILE</span>
+        <span class="text-[10px] font-normal opacity-70">Category + text extraction</span>
         <span id="classifyCost" class="text-[10px] font-normal opacity-70"></span>
       </button>
-      <button onclick="startBookOcr()" class="flex-1 bg-surface-container-high text-on-surface font-headline font-bold py-4 text-xs uppercase tracking-widest border-2 border-on-surface keycap-sm flex flex-col items-center gap-1">
-        <span>BOOK OCR</span>
+      <button onclick="startBookOcr()" class="w-full bg-surface-container-high text-on-surface font-headline font-bold py-4 text-xs uppercase tracking-widest border-2 border-on-surface keycap-sm flex flex-col items-center gap-1">
+        <span>FULL BOOK OCR</span>
+        <span class="text-[10px] font-normal opacity-70">Complete markdown with chapters, footnotes, structure</span>
         <span id="bookOcrCost" class="text-[10px] font-normal opacity-70"></span>
       </button>
     </div>
@@ -567,21 +569,34 @@ document.getElementById('pdfInput').addEventListener('change', e=>{if(e.target.f
 
 async function handlePdf(file) {
   if(!file || !file.name.toLowerCase().endsWith('.pdf')) return;
+  // Show upload feedback immediately
+  const zone = document.getElementById('uploadZone');
+  const origHTML = zone.innerHTML;
+  zone.innerHTML = '<span class="material-symbols-outlined text-3xl text-primary animate-pulse block mb-2">hourglass_top</span><span class="font-mono text-[10px] text-primary uppercase tracking-widest">Uploading ' + file.name + '...</span>';
+
   const formData = new FormData(); formData.append('file',file);
   const res = await fetch('/api/upload-pdf',{method:'POST',body:formData});
   const data = await res.json();
+  zone.innerHTML = origHTML; // restore
   if(!data.ok) return;
   pendingPdfFile = data;
   document.getElementById('pdfChoiceTitle').textContent = data.filename;
-  document.getElementById('pdfChoicePages').textContent = data.page_count+' pages detected';
-  document.getElementById('classifyCost').textContent = '~$'+data.classify_cost.toFixed(3);
-  document.getElementById('bookOcrCost').textContent = '~$'+data.book_cost.toFixed(3);
+
+  // Build description with time estimate
+  const pages = data.page_count;
+  const classifyTime = Math.max(3, pages * 2); // ~2s per page for classify
+  const bookTime = Math.max(10, pages * 4); // ~4s per page for book OCR
+  let desc = pages + ' pages detected';
+  document.getElementById('pdfChoicePages').textContent = desc;
+  document.getElementById('classifyCost').textContent = '~$' + data.classify_cost.toFixed(3) + ' / ~' + classifyTime + 's';
+  document.getElementById('bookOcrCost').textContent = '~$' + data.book_cost.toFixed(3) + ' / ~' + Math.round(bookTime/60) + 'min';
   document.getElementById('pdfChoice').classList.remove('hidden');
 }
 
 async function startClassify() {
   closePdfChoice();
   if(!pendingPdfFile) return;
+  document.getElementById('headerStatus').textContent = 'CLASSIFYING...';
   await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pendingPdfFile.job_id})});
   showLog(); startPolling();
 }
@@ -589,11 +604,50 @@ async function startClassify() {
 async function startBookOcr() {
   closePdfChoice();
   if(!pendingPdfFile) return;
+  document.getElementById('headerStatus').textContent = 'BOOK OCR STARTING...';
   await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pendingPdfFile.job_id})});
-  startPolling();
+  startBookPolling(pendingPdfFile.job_id);
 }
 
 function closePdfChoice() { document.getElementById('pdfChoice').classList.add('hidden'); pendingPdfFile=null; }
+
+// Book OCR dedicated poller — shows chunk-level progress
+async function startBookPolling(jobId) {
+  showLog();
+  async function poll() {
+    try {
+      const res = await fetch('/api/book-status/' + jobId);
+      const job = await res.json();
+
+      // Update header
+      if (job.status === 'processing') {
+        const pct = job.progress || 0;
+        const chunk = job.current_chunk || 'Analyzing document...';
+        document.getElementById('headerStatus').textContent = 'BOOK OCR ' + pct + '% — ' + chunk;
+        // Update log
+        const log = document.getElementById('logArea');
+        log.classList.remove('hidden');
+        log.textContent = (log.textContent ? log.textContent + '\n' : '') + '[Book OCR] ' + chunk + ' (' + pct + '%)';
+        log.scrollTop = log.scrollHeight;
+        setTimeout(poll, 2000);
+      } else if (job.status === 'complete') {
+        document.getElementById('headerStatus').textContent = 'BOOK OCR COMPLETE';
+        const log = document.getElementById('logArea');
+        log.textContent += '\n[Book OCR] Done! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
+        loadSidebarLibrary();
+      } else if (job.status === 'error') {
+        document.getElementById('headerStatus').textContent = 'BOOK OCR ERROR';
+        const log = document.getElementById('logArea');
+        log.textContent += '\n[Book OCR] Error: ' + (job.error || 'Unknown');
+      } else {
+        // Still pending/starting
+        document.getElementById('headerStatus').textContent = 'BOOK OCR STARTING...';
+        setTimeout(poll, 1000);
+      }
+    } catch(e) { console.error('Book poll error:', e); }
+  }
+  poll();
+}
 
 // ==================== POLLING / STATE ====================
 function startPolling() { if(!polling){polling=true;pollStatus();} }
@@ -643,7 +697,12 @@ async function pollStatus() {
 
     // Keep polling if active
     const hasActive = active.length>0 || (state.documents||[]).some(d=>d.status==='queued');
-    if(hasActive) setTimeout(pollStatus,1000); else { polling=false; refreshState(); }
+    if(hasActive) setTimeout(pollStatus,1000); else {
+      polling=false;
+      refreshState();
+      loadSidebarLibrary(); // refresh library when all jobs done
+      document.getElementById('headerStatus').textContent = 'READY';
+    }
   } catch(e) { polling=false; }
 }
 
