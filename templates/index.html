@@ -354,6 +354,7 @@ let motionEnabled = false, motionPrev = null, motionState = 'idle';
 let motionStableStart = null, motionCooldownStart = null;
 let currentPreset = 'none', pendingPdfFile = null;
 let polling = false;
+const shownDocs = new Set(); // track which completed docs we've already displayed
 
 const PRESETS = {
   none:      { ratio: null, label: '' },
@@ -648,6 +649,8 @@ function addToJobHistory(filename, status, links) {
 async function pollBookJob(jobId) {
   const log = document.getElementById('logArea');
   log.style.display = 'block';
+  log.textContent = 'Starting...';
+  let lastChunk = '';
 
   async function poll() {
     try {
@@ -659,17 +662,22 @@ async function pollBookJob(jobId) {
         const chunk = job.current_chunk || 'Analyzing document...';
         updateJobProgress(pct, chunk, 'PROCESSING ' + pct + '%');
         document.getElementById('headerStatus').textContent = 'BOOK OCR ' + pct + '%';
-        log.textContent += '\n[' + pct + '%] ' + chunk;
-        log.scrollTop = log.scrollHeight;
+        // Only append to log when status actually changes
+        if (chunk !== lastChunk) {
+          log.textContent += '\n[' + pct + '%] ' + chunk;
+          log.scrollTop = log.scrollHeight;
+          lastChunk = chunk;
+        }
         setTimeout(poll, 2000);
       } else if (job.status === 'complete') {
         document.getElementById('headerStatus').textContent = 'COMPLETE';
-        const links = '<a href="/api/book-download/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">.MD</a>';
+        const links = '<a href="/api/book-download/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">DOWNLOAD .MD</a>';
         showJobComplete(links);
-        log.textContent += '\nDone! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
+        log.textContent += '\nComplete! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
       } else if (job.status === 'error') {
         document.getElementById('headerStatus').textContent = 'ERROR';
         updateJobProgress(0, 'Error: ' + (job.error || 'Unknown'), 'ERROR');
+        log.textContent += '\nError: ' + (job.error || 'Unknown');
       } else {
         updateJobProgress(0, 'Starting...', 'STARTING');
         setTimeout(poll, 1000);
@@ -701,11 +709,13 @@ async function pollStatus() {
       updateJobProgress(0, d.status + '...', d.status.toUpperCase());
     }
 
-    // When classify jobs complete, show result
+    // When classify jobs complete, show result with category badge
     done.forEach(d => {
-      if (!d._shown) {
-        d._shown = true;
-        showJobComplete('<span class="font-mono text-[10px]">' + (d.category||'misc') + ' / ' + (d.title||d.id) + '</span>');
+      const key = d.id + '|' + (d.title||'');
+      if (!shownDocs.has(key)) {
+        shownDocs.add(key);
+        const catBadge = '<span class="font-mono text-[9px] bg-primary-container text-on-primary-container px-1.5 py-0.5 uppercase">' + (d.category||'misc') + '</span>';
+        showJobComplete(catBadge + ' <span class="font-mono text-[10px]">' + (d.title||d.id) + '</span>');
       }
     });
 
