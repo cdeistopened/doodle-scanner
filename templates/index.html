@@ -308,29 +308,20 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
   </div>
 </div>
 
-<!-- ======================== PDF CHOICE (inline, replaces upload zone) ======================== -->
+<!-- ======================== PDF MODAL ======================== -->
 <div id="pdfChoice" class="hidden fixed inset-0 z-[100] bg-black/60 flex items-center justify-center">
-  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-md w-[90%] hard-shadow">
-    <h3 id="pdfChoiceTitle" class="font-headline text-sm font-bold uppercase tracking-tighter mb-1"></h3>
-    <p id="pdfChoicePages" class="font-mono text-xs text-outline mb-4"></p>
+  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow">
+    <h3 id="pdfChoiceTitle" class="font-headline text-sm font-bold uppercase tracking-tighter mb-2 break-all"></h3>
 
-    <!-- Pre-flight info (shown for larger PDFs) -->
-    <div id="preflightInfo" class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container mb-4 hidden">
-      <div id="preflightContent"></div>
+    <!-- Quick scan results -->
+    <div class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container mb-4 leading-relaxed">
+      <div id="pdfScanInfo"></div>
     </div>
 
-    <div class="flex flex-col gap-3">
-      <button onclick="startClassify()" class="w-full bg-primary text-on-primary font-headline font-bold py-4 text-xs uppercase tracking-widest keycap flex flex-col items-center gap-1">
-        <span>CLASSIFY & FILE</span>
-        <span class="text-[10px] font-normal opacity-70">Category + text extraction</span>
-        <span id="classifyCost" class="text-[10px] font-normal opacity-70"></span>
-      </button>
-      <button onclick="startBookOcr()" class="w-full bg-surface-container-high text-on-surface font-headline font-bold py-4 text-xs uppercase tracking-widest border-2 border-on-surface keycap-sm flex flex-col items-center gap-1">
-        <span>FULL BOOK OCR</span>
-        <span class="text-[10px] font-normal opacity-70">Complete markdown with chapters, footnotes, structure</span>
-        <span id="bookOcrCost" class="text-[10px] font-normal opacity-70"></span>
-      </button>
-    </div>
+    <button onclick="runOcr()" class="w-full bg-primary text-on-primary font-headline font-bold py-4 text-sm uppercase tracking-widest keycap flex flex-col items-center gap-1">
+      <span>RUN OCR</span>
+      <span id="ocrCost" class="text-[10px] font-normal opacity-70"></span>
+    </button>
     <button onclick="closePdfChoice()" class="w-full font-mono text-xs text-outline uppercase py-2 mt-2">Cancel</button>
   </div>
 </div>
@@ -547,63 +538,49 @@ async function handlePdf(file) {
   zone.innerHTML = origHTML; // restore
   if(!data.ok) return;
   pendingPdfFile = data;
-  console.log('PDF uploaded, showing modal:', data);
   document.getElementById('pdfChoiceTitle').textContent = data.filename;
 
   const qs = data.quick_scan || {};
   const pages = qs.page_count || data.page_count;
 
-  // Build description from quick scan
-  let desc = pages + ' pages';
-  if (qs.density) desc += ' \u00B7 ' + qs.density;
-  if (qs.avg_words_per_page) desc += ' \u00B7 ~' + qs.avg_words_per_page + ' words/page';
-  if (!qs.has_text_layer) desc += ' \u00B7 image-only (no text layer)';
-  document.getElementById('pdfChoicePages').textContent = desc;
+  // Build quick scan info for LCD panel
+  let info = pages + ' pages';
+  if (qs.density) info += ' \u00B7 ' + qs.density;
+  if (qs.avg_words_per_page) info += ' \u00B7 ~' + qs.avg_words_per_page + ' words/page';
+  if (!qs.has_text_layer) info += '\nImage-only (no text layer)';
+  if (qs.est_total_words) info += '\n~' + qs.est_total_words.toLocaleString() + ' total words';
+  if (qs.detected_header) info += '\nHeader: "' + qs.detected_header + '"';
+  if (qs.detected_footer) info += '\nFooter: "' + qs.detected_footer + '"';
+  document.getElementById('pdfScanInfo').textContent = info;
 
-  // Show quick scan details in the preflight panel
-  const pfInfo = document.getElementById('preflightInfo');
-  const pfContent = document.getElementById('preflightContent');
-  if (qs.detected_header || qs.detected_footer || (qs.samples && qs.samples.length > 0)) {
-    let details = '';
-    if (qs.detected_header) details += 'Header: "' + qs.detected_header + '"\n';
-    if (qs.detected_footer) details += 'Footer: "' + qs.detected_footer + '"\n';
-    if (qs.est_total_words) details += 'Est. ' + qs.est_total_words.toLocaleString() + ' total words\n';
-    if (qs.samples && qs.samples[0]) details += 'Preview: ' + qs.samples[0].preview.slice(0, 100) + '...';
-    pfContent.textContent = details;
-    pfInfo.classList.remove('hidden');
-  } else {
-    pfInfo.classList.add('hidden');
-  }
+  // Cost — use book OCR cost for >20 pages, classify cost for shorter
+  const isBook = pages > 20;
+  const cost = isBook ? data.book_cost : data.classify_cost;
+  const timeStr = qs.est_time_display || (isBook ? '~' + Math.round(pages * 4 / 60) + 'min' : '~' + (pages * 3) + 's');
+  document.getElementById('ocrCost').textContent = '~$' + cost.toFixed(3) + ' / ' + timeStr;
 
-  // Cost + time from quick scan
-  const bookTimeStr = qs.est_time_display || ('~' + Math.round(pages * 4 / 60) + 'min');
-  const classifyTimeStr = pages <= 10 ? '~' + (pages * 3) + 's' : ('~' + Math.round(pages * 2 / 60) + 'min');
-  document.getElementById('classifyCost').textContent = '~$' + data.classify_cost.toFixed(3) + ' / ' + classifyTimeStr;
-  document.getElementById('bookOcrCost').textContent = '~$' + data.book_cost.toFixed(3) + ' / ' + bookTimeStr;
   document.getElementById('pdfChoice').classList.remove('hidden');
 }
 
-async function startClassify() {
+async function runOcr() {
   const pf = pendingPdfFile;
   closePdfChoice();
   if(!pf) return;
-  // Show active job panel immediately
-  showActiveJob(pf.filename, 'CLASSIFYING...');
-  document.getElementById('headerStatus').textContent = 'CLASSIFYING...';
-  await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
-  showLog(); startPolling();
-}
+  const pages = (pf.quick_scan || {}).page_count || pf.page_count;
+  const isBook = pages > 20;
 
-async function startBookOcr() {
-  const pf = pendingPdfFile;
-  closePdfChoice();
-  if(!pf) return;
-  // Show active job panel immediately
-  showActiveJob(pf.filename, 'STARTING BOOK OCR...');
-  document.getElementById('headerStatus').textContent = 'BOOK OCR STARTING...';
-  // Start immediately — no pending state
-  await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
-  pollBookJob(pf.job_id);
+  showActiveJob(pf.filename, isBook ? 'STARTING OCR...' : 'PROCESSING...');
+  document.getElementById('headerStatus').textContent = isBook ? 'OCR STARTING...' : 'PROCESSING...';
+
+  if (isBook) {
+    // Long doc — use chunked Book OCR pipeline
+    await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
+    pollBookJob(pf.job_id);
+  } else {
+    // Short doc — classify & file
+    await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
+    showLog(); startPolling();
+  }
 }
 
 function closePdfChoice() { document.getElementById('pdfChoice').classList.add('hidden'); pendingPdfFile=null; }
