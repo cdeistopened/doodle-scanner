@@ -696,9 +696,33 @@ def process_pdf(
     consecutive_failures = 0
     max_consecutive_failures = 3  # Abort if 3 chunks fail in a row
 
+    # Check for previously completed chunks (resume support)
+    chunks_dir = None
+    if output_path:
+        chunks_dir = Path(output_path).parent / "chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+
     for i, (start_page, end_page) in enumerate(chunks):
         chunk_num = i + 1
         page_range = f"Pages {start_page + 1}-{end_page}"
+
+        # Resume: skip chunks that already exist on disk
+        if chunks_dir:
+            chunk_file = chunks_dir / f"{Path(output_path).stem}_chunk{chunk_num:02d}.md"
+            if chunk_file.exists() and chunk_file.stat().st_size > 100:
+                print(f"    [RESUME] Chunk {chunk_num} already exists ({chunk_file.stat().st_size:,} bytes), skipping")
+                with open(chunk_file) as f:
+                    content = f.read()
+                    # Strip the metadata comments at the top
+                    lines = content.split('\n')
+                    while lines and lines[0].startswith('<!--'):
+                        lines.pop(0)
+                    result = '\n'.join(lines).strip()
+                all_content.append(result)
+                chunk_results.append({"chunk_num": chunk_num, "pages": page_range, "chars": len(result), "time": 0, "issues": ["resumed"]})
+                if progress_callback:
+                    progress_callback(end_page - range_start, effective_pages, f"Chunk {chunk_num}/{len(chunks)}: {page_range} (cached)")
+                continue
 
         if progress_callback:
             progress_callback(start_page - range_start, effective_pages, f"Chunk {chunk_num}/{len(chunks)}: {page_range}")
@@ -749,6 +773,18 @@ CONTINUATION CONTEXT:
                     f.write(f"<!-- Processed in {elapsed:.1f}s, {len(result):,} chars -->\n\n")
                     f.write(result)
                 print(f"    [SAVED] Chunk {chunk_num} -> {chunk_file.name}")
+
+                # Save progress manifest
+                progress_file = chunks_dir / "progress.json"
+                progress_data = {
+                    "total_chunks": len(chunks),
+                    "completed": chunk_num,
+                    "total_pages": total_pages,
+                    "pages_done": end_page,
+                    "chunks_done": [cr["chunk_num"] for cr in chunk_results if "error" not in cr],
+                }
+                with open(progress_file, "w") as pf:
+                    json.dump(progress_data, pf)
 
         except Exception as e:
             consecutive_failures += 1
