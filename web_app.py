@@ -472,7 +472,7 @@ class BookOCRManager:
 
         def worker():
             try:
-                from pdf_pipeline import process_pdf
+                from image_ocr_pipeline import process_pdf_as_images
                 out_dir = os.path.join(app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR), "books")
                 os.makedirs(out_dir, exist_ok=True)
                 out_path = os.path.join(out_dir, f"{Path(job['filename']).stem}_ocr.md")
@@ -485,7 +485,7 @@ class BookOCRManager:
                 with self.lock:
                     self.jobs[job_id]['status'] = 'processing'
 
-                result = process_pdf(job['file_path'], output_path=out_path, progress_callback=progress_cb, model=MODEL)
+                result = process_pdf_as_images(job['file_path'], output_path=out_path, progress_callback=progress_cb, model=MODEL)
 
                 with self.lock:
                     if job_id in self.jobs:
