@@ -161,7 +161,7 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
     <!-- Secondary controls -->
     <div class="flex gap-2 items-center">
       <button onclick="rotateImage()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm" title="Rotate 90°">↻ <span id="rotLabel">0°</span></button>
-      <button id="btnMotion" onclick="toggleMotion()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">MOTION <span id="motionLabel">OFF</span></button>
+      <button id="btnMotion" onclick="toggleMotion()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">MOTION <span id="motionLabel">ON</span></button>
       <button onclick="toggleMotionSettings()" class="bg-surface-container-high border border-outline-variant px-2 py-2 text-outline hover:text-primary keycap-sm" title="Motion settings"><span class="material-symbols-outlined text-sm">settings</span></button>
       <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto bg-tertiary text-on-tertiary font-headline font-bold px-4 py-2 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
         FINISH
@@ -341,7 +341,7 @@ h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
 <script>
 // ==================== STATE ====================
 let stream = null, rotation = 0, totalPages = 0, currentDocPages = 0;
-let motionEnabled = false, motionPrev = null, motionState = 'idle';
+let motionEnabled = true, motionPrev = null, motionState = 'idle';
 let motionStableStart = null, motionCooldownStart = null;
 let currentPreset = 'none', pendingPdfFile = null;
 let polling = false;
@@ -605,9 +605,11 @@ function updateJobProgress(pct, detail, status) {
 function showJobComplete(links) {
   document.getElementById('jobStatusBadge').textContent = 'COMPLETE';
   document.getElementById('jobProgressBar').style.width = '100%';
+  document.getElementById('jobDetail').textContent = ''; // clear chunk status
   const result = document.getElementById('jobResult');
   result.style.display = 'block';
   document.getElementById('jobResultLinks').innerHTML = links;
+  document.getElementById('headerStatus').textContent = 'READY';
   // Add to job history
   addToJobHistory(document.getElementById('jobFilename').textContent, 'complete', links);
 }
@@ -648,7 +650,8 @@ async function pollBookJob(jobId) {
         setTimeout(poll, 2000);
       } else if (job.status === 'complete') {
         document.getElementById('headerStatus').textContent = 'COMPLETE';
-        const links = '<a href="/api/book-download/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">DOWNLOAD .MD</a>';
+        const links = '<a href="/api/book-download/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">DOWNLOAD .MD</a>' +
+          '<a href="/api/book-download-docx/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">DOWNLOAD .DOCX</a>';
         showJobComplete(links);
         log.textContent += '\nComplete! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
       } else if (job.status === 'error') {
@@ -851,8 +854,10 @@ checkHealth();
 loadOutputPath();
 startCamera();
 refreshState();
-// Load existing jobs into history on page load
 loadJobHistory();
+// Motion detection ON by default — start the loop after camera initializes
+document.getElementById('motionBadge').classList.add('on');
+setTimeout(() => requestAnimationFrame(motionLoop), 2000); // wait for camera to start
 </script>
 </body>
 </html>

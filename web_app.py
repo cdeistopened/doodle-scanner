@@ -721,6 +721,26 @@ def api_book_download(job_id):
     return send_file(job['output_path'], as_attachment=True, download_name=os.path.basename(job['output_path']))
 
 
+@app.route('/api/book-download-docx/<job_id>')
+def api_book_download_docx(job_id):
+    """Download Book OCR result as .docx."""
+    job = book_ocr.get_job(job_id)
+    if not job or not job.get('output_path'):
+        return jsonify({'error': 'Not found'}), 404
+    md_path = job['output_path']
+    docx_path = md_path.replace('.md', '.docx')
+    # Generate DOCX if it doesn't exist yet
+    if not os.path.exists(docx_path):
+        try:
+            from docx_export import markdown_to_docx
+            with open(md_path) as f:
+                md_text = f.read()
+            markdown_to_docx(md_text, docx_path)
+        except Exception as e:
+            return jsonify({'error': f'DOCX conversion failed: {e}'}), 500
+    return send_file(docx_path, as_attachment=True, download_name=os.path.basename(docx_path))
+
+
 @app.route('/api/library')
 def api_library():
     return jsonify(get_library(app.config.get('OUTPUT_DIR', DEFAULT_OUTPUT_DIR)))
