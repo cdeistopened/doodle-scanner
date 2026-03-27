@@ -5,53 +5,105 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no"/>
 <title>SCANDOC 9000</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <script>
-tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-container-low":"#faf3e0","surface-container":"#f4eedb","surface-container-high":"#eee8d5","surface-container-highest":"#e8e2cf","surface-container-lowest":"#ffffff","surface":"#fff9e9","surface-dim":"#e0dac7","on-surface":"#1e1c10","on-surface-variant":"#3d4947","primary":"#006a64","primary-container":"#2aa198","on-primary":"#ffffff","on-primary-container":"#00302d","tertiary":"#aa3600","on-tertiary":"#ffffff","error":"#ba1a1a","on-error":"#ffffff","outline":"#6d7a78","outline-variant":"#bcc9c7","lcd-bg":"#002b36"},fontFamily:{"headline":["IBM Plex Mono","monospace"],"body":["IBM Plex Sans","sans-serif"]},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"}}}}
+tailwind.config={darkMode:"class",theme:{extend:{colors:{
+  "paper":"#f8f8ec","navy":"#0a1628","teal":"#2aa198","teal-dim":"#1a8a82",
+  "ink":"#1e1e1e","mist":"#e8e4dc","mist-dark":"#d4d0c7",
+  "electric":"#567cff","lcd-bg":"#002b36",
+  "error":"#ba1a1a","on-error":"#ffffff"
+},fontFamily:{
+  "display":["Space Grotesk","sans-serif"],
+  "body":["Plus Jakarta Sans","sans-serif"],
+  "mono":["Space Mono","monospace"]
+},borderRadius:{"DEFAULT":"0","lg":"2px","xl":"4px"}}}}
 </script>
 <style>
 .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;vertical-align:middle}
-body{font-family:'IBM Plex Sans',sans-serif}
-h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
+body{font-family:'Plus Jakarta Sans',sans-serif;background:#f8f8ec;color:#1e1e1e}
+h1,h2,h3,.font-display{font-family:'Space Grotesk',sans-serif;letter-spacing:-0.02em}
+.font-mono{font-family:'Space Mono',monospace}
 .lcd-glow{text-shadow:0 0 8px rgba(42,161,152,0.6)}
-.keycap{box-shadow:0 4px 0 0 rgba(30,28,16,1);transition:all 75ms}
-.keycap:active{transform:translateY(4px);box-shadow:none}
-.keycap-sm{box-shadow:0 2px 0 0 rgba(30,28,16,0.3);transition:all 75ms}
-.keycap-sm:active{transform:translateY(2px);box-shadow:none}
-.hard-shadow{box-shadow:2px 2px 0 0 rgba(30,28,16,0.2)}
+
+/* CIA-style buttons: thick border, hard shadow hover */
+.btn-primary{
+  font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;
+  background:#2aa198;color:#f8f8ec;padding:16px 32px;
+  border:3px solid #1e1e1e;cursor:pointer;transition:all 0.15s;
+  text-transform:uppercase;letter-spacing:0.05em;
+}
+.btn-primary:hover{transform:translate(-2px,-2px);box-shadow:4px 4px 0 #1e1e1e}
+.btn-primary:active{transform:translate(0,0);box-shadow:none}
+.btn-primary:disabled{opacity:0.3;cursor:not-allowed;transform:none;box-shadow:none}
+
+.btn-secondary{
+  font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;
+  background:transparent;color:#1e1e1e;padding:14px 28px;
+  border:3px solid #d4d0c7;cursor:pointer;transition:all 0.15s;
+  text-transform:uppercase;letter-spacing:0.05em;
+}
+.btn-secondary:hover{border-color:#1e1e1e;transform:translate(-2px,-2px);box-shadow:4px 4px 0 #d4d0c7}
+.btn-secondary:active{transform:translate(0,0);box-shadow:none}
+.btn-secondary:disabled{opacity:0.3;cursor:not-allowed;transform:none;box-shadow:none}
+
+.btn-danger{
+  font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;
+  background:#ba1a1a;color:#f8f8ec;padding:14px 28px;
+  border:3px solid #1e1e1e;cursor:pointer;transition:all 0.15s;
+  text-transform:uppercase;letter-spacing:0.05em;
+}
+
+/* Upload zone */
+.upload-zone{border:3px dashed #bfb9ad;transition:all 0.2s;background:rgba(255,255,255,0.5)}
+.upload-zone:hover{border-color:#2aa198;border-width:3px;background:rgba(42,161,152,0.04)}
+.upload-zone.dragover{border-color:#2aa198;border-style:solid;border-width:4px;background:rgba(42,161,152,0.08)}
+
+/* Tabs */
+.tab{cursor:pointer;transition:all 100ms;border-bottom:3px solid transparent}
+.tab.active{background:#0a1628;color:#2aa198;border-bottom-color:#2aa198}
+.tab:not(.active){background:#f0efe6;color:#1e1e1e}
+.tab:not(.active):hover{background:#e8e4dc}
+
+/* Cards / panels */
+.panel{background:#fff;border:2px solid #e8e4dc}
+.panel-dark{background:#0a1628;border:2px solid #1e1e1e;color:#f8f8ec}
+
+/* Job history items */
+.job-item{background:#fff;border:2px solid #e8e4dc;transition:all 0.15s}
+.job-item:hover{border-color:#2aa198;transform:translate(-1px,-1px);box-shadow:3px 3px 0 #e8e4dc}
+
+/* Flash */
 #flash{position:absolute;inset:0;background:white;opacity:0;pointer-events:none;transition:opacity .15s}
 #flash.fire{opacity:.6;transition:none}
-.upload-zone.dragover{border-color:#2aa198!important;background:rgba(42,161,152,0.05)}
-.tab{cursor:pointer;transition:all 75ms}
-.tab.active{background:#002b36;color:#2aa198}
-.tab:not(.active){background:#eee8d5;color:#3d4947}
-.tab:not(.active):hover{background:#e8e2cf}
+
+/* Section labels */
+.section-label{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#567cff}
 </style>
 </head>
-<body class="bg-surface text-on-surface min-h-screen flex flex-col">
+<body class="min-h-screen flex flex-col">
 
 <!-- HEADER -->
-<header class="fixed top-0 w-full z-50 flex justify-between items-center px-4 md:px-6 h-12 bg-lcd-bg border-b-4 border-on-surface">
-  <span class="font-headline uppercase tracking-widest text-sm font-bold text-primary-container lcd-glow cursor-pointer" onclick="goHome()">SCANDOC 9000</span>
-  <div class="flex items-center gap-2">
-    <span id="headerStatus" class="font-headline text-xs text-primary-container lcd-glow tracking-wider">READY</span>
-    <button onclick="toggleSettings()" class="p-1 text-outline hover:text-primary-container"><span class="material-symbols-outlined text-lg">settings</span></button>
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-14 bg-navy border-b-3 border-ink">
+  <span class="font-display uppercase tracking-wider text-base font-bold text-teal lcd-glow cursor-pointer" onclick="goHome()">SCANDOC 9000</span>
+  <div class="flex items-center gap-3">
+    <span id="headerStatus" class="font-mono text-xs text-teal lcd-glow tracking-wider">READY</span>
+    <button onclick="toggleSettings()" class="p-1.5 text-mist hover:text-teal transition-colors"><span class="material-symbols-outlined text-lg">settings</span></button>
   </div>
 </header>
 
 <!-- TAB BAR -->
-<div class="fixed top-12 w-full z-40 flex border-b-2 border-on-surface">
-  <button id="tabUpload" class="tab active flex-1 py-3 font-headline text-xs uppercase tracking-widest text-center border-r border-on-surface/20" onclick="switchTab('upload')">
-    <span class="material-symbols-outlined text-sm mr-1">upload_file</span> Upload PDF
+<div class="fixed top-14 w-full z-40 flex">
+  <button id="tabUpload" class="tab active flex-1 py-3.5 font-display text-sm font-semibold uppercase tracking-wider text-center" onclick="switchTab('upload')">
+    <span class="material-symbols-outlined text-base mr-1.5 align-[-3px]">upload_file</span>Upload PDF
   </button>
-  <button id="tabScan" class="tab flex-1 py-3 font-headline text-xs uppercase tracking-widest text-center" onclick="switchTab('scan')">
-    <span class="material-symbols-outlined text-sm mr-1">photo_camera</span> Scan Pages
+  <button id="tabScan" class="tab flex-1 py-3.5 font-display text-sm font-semibold uppercase tracking-wider text-center" onclick="switchTab('scan')">
+    <span class="material-symbols-outlined text-base mr-1.5 align-[-3px]">photo_camera</span>Scan Pages
   </button>
 </div>
 
 <!-- MAIN -->
-<main class="pt-24 pb-4 px-4 md:px-8 flex-1">
+<main class="pt-28 pb-8 px-6 md:px-12 flex-1">
   <div class="max-w-4xl mx-auto">
 
     <!-- ============ UPLOAD TAB ============ -->
@@ -59,11 +111,11 @@ h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
 
       <!-- State: idle (upload zone) -->
       <div id="uploadIdle">
-        <div id="uploadZone" class="upload-zone border-2 border-dashed border-outline-variant p-12 md:p-16 text-center cursor-pointer hover:bg-surface-container-low transition-colors"
+        <div id="uploadZone" class="upload-zone p-16 md:p-20 text-center cursor-pointer"
              onclick="document.getElementById('pdfInput').click()">
-          <span class="material-symbols-outlined text-6xl text-outline mb-4 block">upload_file</span>
-          <div class="font-headline text-xl uppercase tracking-wider mb-2">Drop a PDF here</div>
-          <div class="font-body text-sm text-outline">or click to choose a file</div>
+          <span class="material-symbols-outlined text-7xl text-mist-dark mb-6 block">upload_file</span>
+          <div class="font-display text-2xl font-bold uppercase tracking-wide mb-2">Drop a PDF here</div>
+          <div class="font-body text-base text-ink/50">or click to choose a file</div>
         </div>
         <input type="file" id="pdfInput" accept=".pdf" class="hidden"/>
       </div>
@@ -80,27 +132,27 @@ h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
           <div id="scannerOverlay" class="absolute left-0 right-0 top-0 bg-primary-container/5 z-5" style="height:0%;transition:height 0.3s linear;"></div>
         </div>
         <!-- LCD status below -->
-        <div class="bg-lcd-bg p-4 border-x-2 border-b-2 border-outline-variant">
-          <div class="flex justify-between items-center mb-2">
-            <div id="jobFilename" class="font-headline text-sm text-primary-container lcd-glow uppercase truncate"></div>
-            <div id="jobPct" class="font-mono text-sm text-primary-container lcd-glow">0%</div>
+        <div class="panel-dark p-5">
+          <div class="flex justify-between items-center mb-3">
+            <div id="jobFilename" class="font-display text-base text-teal lcd-glow uppercase truncate font-bold"></div>
+            <div id="jobPct" class="font-mono text-base text-teal lcd-glow font-bold">0%</div>
           </div>
-          <div class="h-2 bg-black/30 rounded-full overflow-hidden mb-2">
-            <div id="jobProgressBar" class="h-full bg-primary-container rounded-full transition-all duration-500" style="width:0%"></div>
+          <div class="h-2.5 bg-white/10 overflow-hidden mb-2">
+            <div id="jobProgressBar" class="h-full bg-teal transition-all duration-500" style="width:0%"></div>
           </div>
-          <div id="jobDetail" class="font-mono text-xs text-primary-container/50"></div>
-          <div id="jobMeta" class="font-mono text-[10px] text-primary-container/40 mt-1"></div>
+          <div id="jobDetail" class="font-mono text-xs text-teal/50"></div>
+          <div id="jobMeta" class="font-mono text-[10px] text-teal/30 mt-1"></div>
         </div>
       </div>
 
       <!-- State: complete -->
       <div id="uploadComplete" style="display:none">
-        <div class="bg-surface-container-lowest p-6 md:p-8 border border-outline-variant hard-shadow text-center">
-          <span class="material-symbols-outlined text-5xl text-primary-container mb-3 block">check_circle</span>
-          <div id="resultTitle" class="font-headline text-lg uppercase tracking-tight mb-1"></div>
-          <div id="resultMeta" class="font-mono text-sm text-outline mb-6"></div>
-          <div id="resultLinks" class="flex gap-4 justify-center mb-6"></div>
-          <button onclick="resetUpload()" class="font-headline text-xs uppercase tracking-widest text-primary hover:underline">Upload another PDF</button>
+        <div class="panel p-8 md:p-10 text-center">
+          <span class="material-symbols-outlined text-6xl text-teal mb-4 block">check_circle</span>
+          <div id="resultTitle" class="font-display text-xl font-bold uppercase tracking-tight mb-2"></div>
+          <div id="resultMeta" class="font-mono text-sm text-ink/50 mb-8"></div>
+          <div id="resultLinks" class="flex gap-4 justify-center mb-8"></div>
+          <button onclick="resetUpload()" class="btn-secondary">Upload another PDF</button>
         </div>
       </div>
     </div>
@@ -124,17 +176,17 @@ h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
 
       <!-- Camera controls -->
       <div class="flex gap-3 mb-3">
-        <button onclick="capture()" class="flex-[2] bg-primary text-on-primary font-headline font-bold py-4 text-sm uppercase tracking-widest keycap flex items-center justify-center gap-2">
+        <button onclick="capture()" class="flex-[2] btn-primary flex items-center justify-center gap-2">
           <span class="material-symbols-outlined text-xl">photo_camera</span> Capture
         </button>
-        <button id="btnNext" onclick="nextDoc()" disabled class="flex-1 bg-surface-container-high border-2 border-on-surface font-headline font-bold py-4 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
+        <button id="btnNext" onclick="nextDoc()" disabled class="flex-1 btn-secondary disabled:opacity-30">
           Next Doc
         </button>
       </div>
       <div class="flex gap-2 mb-4">
-        <button onclick="rotateImage()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">↻ <span id="rotLabel">0°</span></button>
-        <button onclick="toggleMotion()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">Motion <span id="motionLabel">ON</span></button>
-        <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto bg-tertiary text-on-tertiary font-headline font-bold px-6 py-2 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
+        <button onclick="rotateImage()" class="btn-secondary !py-2 !px-3 !text-xs">↻ <span id="rotLabel">0°</span></button>
+        <button onclick="toggleMotion()" class="btn-secondary !py-2 !px-3 !text-xs">Motion <span id="motionLabel">ON</span></button>
+        <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto btn-danger !py-2 !px-4 !text-xs disabled:opacity-30">
           Done (<span id="finishCount">0</span> pages)
         </button>
       </div>
@@ -142,7 +194,7 @@ h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
 
     <!-- ============ RECENT JOBS (both tabs) ============ -->
     <div class="mt-6">
-      <h2 class="font-headline text-xs uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mb-3">Recent Jobs</h2>
+      <h2 class="section-label mb-3">Recent Jobs</h2>
       <div id="jobList" class="flex flex-col gap-2">
         <div class="font-mono text-xs text-outline italic">No jobs yet</div>
       </div>
@@ -153,32 +205,32 @@ h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
 
 <!-- PDF MODAL -->
 <div id="pdfModal" class="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center" style="display:none">
-  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow">
+  <div class="bg-paper border-3 border-ink p-6 max-w-sm w-[90%] shadow-[6px_6px_0_rgba(30,30,30,0.15)]">
     <h3 id="pdfModalTitle" class="font-headline text-sm font-bold uppercase tracking-tighter mb-2 break-all"></h3>
     <div class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container mb-4 leading-relaxed">
       <div id="pdfScanInfo"></div>
     </div>
-    <button onclick="runOcr()" class="w-full bg-primary text-on-primary font-headline font-bold py-4 text-sm uppercase tracking-widest keycap flex flex-col items-center gap-1">
+    <button onclick="runOcr()" class="w-full btn-primary flex flex-col items-center gap-1">
       <span>RUN OCR</span>
       <span id="ocrCost" class="text-[10px] font-normal opacity-70"></span>
     </button>
-    <button onclick="closePdfModal()" class="w-full font-mono text-xs text-outline uppercase py-2 mt-2">Cancel</button>
+    <button onclick="closePdfModal()" class="w-full font-mono text-xs text-ink/40 uppercase py-3 mt-1 hover:text-ink transition-colors">Cancel</button>
   </div>
 </div>
 
 <!-- FINISH SCANNING MODAL -->
 <div id="finishModal" class="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center" style="display:none">
-  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow">
+  <div class="bg-paper border-3 border-ink p-6 max-w-sm w-[90%] shadow-[6px_6px_0_rgba(30,30,30,0.15)]">
     <h3 class="font-headline text-lg font-bold uppercase tracking-tighter mb-2">Session Complete</h3>
     <p id="finishSummary" class="font-mono text-xs text-outline mb-4"></p>
-    <button onclick="classifySession()" class="w-full bg-primary text-on-primary font-headline font-bold py-3 text-sm uppercase tracking-widest keycap mb-3">Classify & File</button>
-    <button onclick="closeFinishModal()" class="w-full font-mono text-xs text-outline uppercase py-2">Cancel</button>
+    <button onclick="classifySession()" class="w-full btn-primary mb-3">Classify & File</button>
+    <button onclick="closeFinishModal()" class="w-full font-mono text-xs text-ink/40 uppercase py-3 hover:text-ink transition-colors">Cancel</button>
   </div>
 </div>
 
 <!-- SETTINGS OVERLAY -->
 <div id="settingsOverlay" class="fixed inset-0 z-[90] bg-black/60 flex items-center justify-center" style="display:none">
-  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow max-h-[80vh] overflow-y-auto">
+  <div class="bg-paper border-3 border-ink p-6 max-w-sm w-[90%] shadow-[6px_6px_0_rgba(30,30,30,0.15)] max-h-[80vh] overflow-y-auto">
     <div class="flex justify-between items-center mb-4">
       <h2 class="font-headline text-lg font-bold uppercase tracking-tighter">Settings</h2>
       <button onclick="toggleSettings()" class="text-outline hover:text-on-surface"><span class="material-symbols-outlined">close</span></button>
@@ -493,8 +545,8 @@ function showComplete(jobId,title,time){
   document.getElementById('headerStatus').textContent='COMPLETE';
   let links='';
   if(jobId){
-    links+='<a href="/api/book-download/'+jobId+'" class="bg-primary text-on-primary font-headline font-bold py-3 px-6 text-sm uppercase tracking-widest keycap-sm">.MD</a>';
-    links+='<a href="/api/book-download-docx/'+jobId+'" class="bg-surface-container-high border-2 border-on-surface font-headline font-bold py-3 px-6 text-sm uppercase tracking-widest keycap-sm">.DOCX</a>';
+    links+='<a href="/api/book-download/'+jobId+'" class="btn-primary !py-3 !px-8 !text-sm inline-block no-underline">.MD</a>';
+    links+='<a href="/api/book-download-docx/'+jobId+'" class="btn-secondary !py-3 !px-8 !text-sm inline-block no-underline">.DOCX</a>';
   }
   document.getElementById('resultLinks').innerHTML=links;
   addToHistory(title,'done',links);
@@ -510,7 +562,7 @@ function addToHistory(title,status,links){
   const list=document.getElementById('jobList');
   if(list.querySelector('.italic')) list.innerHTML='';
   const item=document.createElement('div');
-  item.className='bg-surface-container-lowest p-3 border border-outline-variant flex justify-between items-center';
+  item.className='job-item p-3 flex justify-between items-center';
   item.innerHTML='<div class="flex-1 min-w-0"><span class="font-mono text-xs font-bold uppercase truncate block">'+title+'</span></div><span class="font-mono text-[10px] text-primary-container uppercase ml-2">'+status+'</span>';
   list.prepend(item);
 }
