@@ -713,6 +713,26 @@ def api_book_status(job_id):
     return jsonify(job)
 
 
+@app.route('/api/page-preview/<job_id>/<int:page_num>')
+def api_page_preview(job_id, page_num):
+    """Render a PDF page as a JPEG for the scanner simulation."""
+    job = book_ocr.get_job(job_id)
+    if not job or not job.get('file_path'):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        doc = fitz.open(job['file_path'])
+        if page_num < 0 or page_num >= len(doc):
+            doc.close()
+            return jsonify({'error': 'Page out of range'}), 400
+        page = doc[page_num]
+        pix = page.get_pixmap(dpi=72)  # low res for preview
+        img_bytes = pix.tobytes('jpeg')
+        doc.close()
+        return img_bytes, 200, {'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=3600'}
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/book-download/<job_id>')
 def api_book_download(job_id):
     job = book_ocr.get_job(job_id)

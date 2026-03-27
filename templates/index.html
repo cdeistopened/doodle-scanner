@@ -68,15 +68,28 @@ h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
         <input type="file" id="pdfInput" accept=".pdf" class="hidden"/>
       </div>
 
-      <!-- State: processing -->
+      <!-- State: processing (scanner simulation) -->
       <div id="uploadProcessing" style="display:none">
-        <div class="bg-lcd-bg p-6 md:p-8 border-2 border-outline-variant">
-          <div id="jobFilename" class="font-headline text-lg text-primary-container lcd-glow uppercase truncate mb-1"></div>
-          <div id="jobMeta" class="font-mono text-xs text-primary-container/60 mb-4"></div>
-          <div class="h-3 bg-black/30 rounded-full overflow-hidden mb-2">
+        <!-- Page preview with scanner line -->
+        <div class="relative bg-stone-100 border-2 border-outline-variant overflow-hidden" style="aspect-ratio:8.5/11;max-height:55vh;">
+          <!-- Page image (rendered from PDF) -->
+          <canvas id="pageCanvas" class="w-full h-full object-contain"></canvas>
+          <!-- Scanner light bar -->
+          <div id="scannerBar" class="absolute left-0 right-0 h-1.5 bg-primary-container z-10" style="top:0%;box-shadow:0 0 12px #2aa198,0 0 4px #fff;transition:top 0.3s linear;"></div>
+          <!-- Processed overlay (green tint above the bar) -->
+          <div id="scannerOverlay" class="absolute left-0 right-0 top-0 bg-primary-container/5 z-5" style="height:0%;transition:height 0.3s linear;"></div>
+        </div>
+        <!-- LCD status below -->
+        <div class="bg-lcd-bg p-4 border-x-2 border-b-2 border-outline-variant">
+          <div class="flex justify-between items-center mb-2">
+            <div id="jobFilename" class="font-headline text-sm text-primary-container lcd-glow uppercase truncate"></div>
+            <div id="jobPct" class="font-mono text-sm text-primary-container lcd-glow">0%</div>
+          </div>
+          <div class="h-2 bg-black/30 rounded-full overflow-hidden mb-2">
             <div id="jobProgressBar" class="h-full bg-primary-container rounded-full transition-all duration-500" style="width:0%"></div>
           </div>
-          <div id="jobDetail" class="font-mono text-sm text-primary-container/70"></div>
+          <div id="jobDetail" class="font-mono text-xs text-primary-container/50"></div>
+          <div id="jobMeta" class="font-mono text-[10px] text-primary-container/40 mt-1"></div>
         </div>
       </div>
 
@@ -364,6 +377,7 @@ async function runOcr(){
   activeJobId=pf.job_id;
   if(isBook){
     await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
+    startScannerSim(pf.job_id,pages);
     pollBookJob(pf.job_id);
   }else{
     await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
@@ -373,20 +387,77 @@ async function runOcr(){
 function closePdfModal(){document.getElementById('pdfModal').style.display='none';pendingPdfFile=null;}
 
 // ==================== POLLING ====================
+// ==================== SCANNER SIMULATION ====================
+let scannerPageNum=0,scannerTotalPages=0,scannerJobId=null;
+let scannerAnimFrame=null,scannerBarPos=0;
+
+function startScannerSim(jobId,totalPages){
+  scannerJobId=jobId;scannerTotalPages=totalPages;scannerPageNum=0;
+  loadPagePreview(jobId,0);
+  animateScanner();
+}
+
+function loadPagePreview(jobId,pageNum){
+  const canvas=document.getElementById('pageCanvas');
+  const ctx=canvas.getContext('2d');
+  const img=new Image();
+  img.onload=function(){
+    canvas.width=img.width;canvas.height=img.height;
+    ctx.drawImage(img,0,0);
+  };
+  img.src='/api/page-preview/'+jobId+'/'+pageNum;
+}
+
+function animateScanner(){
+  const bar=document.getElementById('scannerBar');
+  const overlay=document.getElementById('scannerOverlay');
+  scannerBarPos=0;
+  function tick(){
+    scannerBarPos+=0.4; // speed: ~2.5s per page sweep
+    if(scannerBarPos>100) scannerBarPos=0;
+    bar.style.top=scannerBarPos+'%';
+    overlay.style.height=scannerBarPos+'%';
+    scannerAnimFrame=requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function advanceScannerPage(pageNum){
+  if(scannerJobId&&pageNum<scannerTotalPages){
+    scannerPageNum=pageNum;
+    loadPagePreview(scannerJobId,pageNum);
+    scannerBarPos=0; // reset sweep for new page
+  }
+}
+
+function stopScannerSim(){
+  if(scannerAnimFrame) cancelAnimationFrame(scannerAnimFrame);
+  scannerAnimFrame=null;
+}
+
 async function pollBookJob(jobId){
-  let lastChunk='';
+  let lastChunk='',lastPct=0;
   async function poll(){
     try{
       const job=await(await fetch('/api/book-status/'+jobId)).json();
       if(job.status==='processing'){
         const pct=job.progress||0;const chunk=job.current_chunk||'Analyzing...';
         document.getElementById('jobProgressBar').style.width=pct+'%';
+        document.getElementById('jobPct').textContent=pct+'%';
         if(chunk!==lastChunk){document.getElementById('jobDetail').textContent=chunk;lastChunk=chunk;}
         document.getElementById('headerStatus').textContent='OCR '+pct+'%';
+        // Advance page preview based on progress
+        if(pct>lastPct&&scannerTotalPages>0){
+          const newPage=Math.floor((pct/100)*scannerTotalPages);
+          if(newPage!==scannerPageNum) advanceScannerPage(newPage);
+          lastPct=pct;
+        }
         setTimeout(poll,2000);
       }else if(job.status==='complete'){
+        stopScannerSim();
         showComplete(jobId,document.getElementById('jobFilename').textContent,job.total_time);
       }else if(job.status==='error'){
+        stopScannerSim();
         document.getElementById('jobDetail').textContent='Error: '+(job.error||'Unknown');
         document.getElementById('headerStatus').textContent='ERROR';
       }else{setTimeout(poll,1000);}
