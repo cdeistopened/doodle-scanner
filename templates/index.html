@@ -8,856 +8,478 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <script>
-tailwind.config = {
-  darkMode: "class",
-  theme: {
-    extend: {
-      colors: {
-        "surface-container-low":"#faf3e0","surface-container":"#f4eedb","surface-container-high":"#eee8d5",
-        "surface-container-highest":"#e8e2cf","surface-container-lowest":"#ffffff",
-        "surface":"#fff9e9","surface-dim":"#e0dac7","surface-bright":"#fff9e9","surface-variant":"#e8e2cf",
-        "on-surface":"#1e1c10","on-surface-variant":"#3d4947","on-background":"#1e1c10",
-        "primary":"#006a64","primary-container":"#2aa198","primary-fixed":"#89f5ea","primary-fixed-dim":"#6cd8ce",
-        "on-primary":"#ffffff","on-primary-container":"#00302d","on-primary-fixed":"#00201e",
-        "secondary":"#3c6471","secondary-container":"#bde6f6",
-        "on-secondary":"#ffffff","on-secondary-container":"#416875",
-        "tertiary":"#aa3600","tertiary-container":"#f06630",
-        "on-tertiary":"#ffffff","on-tertiary-container":"#511500",
-        "error":"#ba1a1a","error-container":"#ffdad6","on-error":"#ffffff","on-error-container":"#93000a",
-        "outline":"#6d7a78","outline-variant":"#bcc9c7",
-        "inverse-surface":"#333124","inverse-on-surface":"#f7f1dd","inverse-primary":"#6cd8ce",
-        "lcd-bg":"#002b36"
-      },
-      fontFamily: {
-        "headline":["IBM Plex Mono","monospace"],
-        "body":["IBM Plex Sans","sans-serif"],
-        "label":["IBM Plex Mono","monospace"]
-      },
-      borderRadius: {"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},
-    },
-  },
-}
+tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-container-low":"#faf3e0","surface-container":"#f4eedb","surface-container-high":"#eee8d5","surface-container-highest":"#e8e2cf","surface-container-lowest":"#ffffff","surface":"#fff9e9","surface-dim":"#e0dac7","on-surface":"#1e1c10","on-surface-variant":"#3d4947","primary":"#006a64","primary-container":"#2aa198","on-primary":"#ffffff","on-primary-container":"#00302d","tertiary":"#aa3600","on-tertiary":"#ffffff","error":"#ba1a1a","on-error":"#ffffff","outline":"#6d7a78","outline-variant":"#bcc9c7","lcd-bg":"#002b36"},fontFamily:{"headline":["IBM Plex Mono","monospace"],"body":["IBM Plex Sans","sans-serif"]},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"}}}}
 </script>
 <style>
-.material-symbols-outlined { font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24; vertical-align:middle; }
-body { font-family:'IBM Plex Sans',sans-serif; }
-h1,h2,h3,.font-mono,.mono { font-family:'IBM Plex Mono',monospace; }
-.lcd-glow { text-shadow:0 0 8px rgba(42,161,152,0.6); }
-.hard-shadow { box-shadow:2px 2px 0 0 rgba(30,28,16,0.2); }
-.keycap { box-shadow:0 4px 0 0 rgba(30,28,16,1); transition:all 75ms; }
-.keycap:active { transform:translateY(4px); box-shadow:0 0 0 0 rgba(30,28,16,1); }
-.keycap-sm { box-shadow:0 2px 0 0 rgba(30,28,16,0.3); transition:all 75ms; }
-.keycap-sm:active { transform:translateY(2px); box-shadow:none; }
-.scanner-glow { box-shadow:inset 0 0 40px rgba(42,161,152,0.1); }
-/* Scanner sweep animation */
-@keyframes sweep { 0%{top:-8px} 100%{top:100%} }
-.scanner-sweep {
-  position:absolute; left:0; right:0; height:8px; z-index:20;
-  background:#859900; box-shadow:0 0 15px #859900,0 0 5px #fff;
-  animation:sweep 2.5s linear infinite;
-}
-/* View management */
-.view { display:none; }
-.view.active { display:flex; }
-/* Flash */
-#flash { position:absolute;inset:0;background:white;opacity:0;pointer-events:none;transition:opacity 0.15s; }
-#flash.fire { opacity:0.6;transition:none; }
-/* Motion indicator */
-#motionBadge { display:none; }
-#motionBadge.on { display:flex; }
-/* Upload dragover */
-.upload-zone.dragover { border-color:#2aa198 !important; background:rgba(42,161,152,0.05); }
-/* Modal */
-.modal-bg { display:none; }
-.modal-bg.open { display:flex; }
+.material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;vertical-align:middle}
+body{font-family:'IBM Plex Sans',sans-serif}
+h1,h2,h3,.font-mono{font-family:'IBM Plex Mono',monospace}
+.lcd-glow{text-shadow:0 0 8px rgba(42,161,152,0.6)}
+.keycap{box-shadow:0 4px 0 0 rgba(30,28,16,1);transition:all 75ms}
+.keycap:active{transform:translateY(4px);box-shadow:none}
+.keycap-sm{box-shadow:0 2px 0 0 rgba(30,28,16,0.3);transition:all 75ms}
+.keycap-sm:active{transform:translateY(2px);box-shadow:none}
+.hard-shadow{box-shadow:2px 2px 0 0 rgba(30,28,16,0.2)}
+#flash{position:absolute;inset:0;background:white;opacity:0;pointer-events:none;transition:opacity .15s}
+#flash.fire{opacity:.6;transition:none}
+.upload-zone.dragover{border-color:#2aa198!important;background:rgba(42,161,152,0.05)}
+.tab{cursor:pointer;transition:all 75ms}
+.tab.active{background:#002b36;color:#2aa198}
+.tab:not(.active){background:#eee8d5;color:#3d4947}
+.tab:not(.active):hover{background:#e8e2cf}
 </style>
 </head>
+<body class="bg-surface text-on-surface min-h-screen flex flex-col">
 
-<body class="bg-surface text-on-surface selection:bg-primary-container selection:text-on-primary-container min-h-screen flex flex-col">
-
-<!-- ======================== LCD HEADER ======================== -->
+<!-- HEADER -->
 <header class="fixed top-0 w-full z-50 flex justify-between items-center px-4 md:px-6 h-12 bg-lcd-bg border-b-4 border-on-surface">
-  <div class="flex items-center gap-3">
-    <span class="font-headline uppercase tracking-widest text-sm font-bold text-primary-container lcd-glow cursor-pointer" onclick="showView('scanner')">SCANDOC 9000 v2</span>
-  </div>
-  <div class="flex items-center gap-1">
-    <span id="headerStatus" class="font-headline text-xs text-primary-container lcd-glow tracking-wider mr-3">READY</span>
-    <span id="headerCost" class="font-headline text-xs text-outline tracking-wider mr-3"></span>
-    <button onclick="showView('scanner')" class="p-1.5 text-primary-container hover:bg-primary/20 rounded-sm" title="Scanner"><span class="material-symbols-outlined text-lg">barcode_scanner</span></button>
-    <button onclick="showView('settings')" class="p-1.5 text-outline hover:bg-primary/20 rounded-sm" title="Settings"><span class="material-symbols-outlined text-lg">settings</span></button>
+  <span class="font-headline uppercase tracking-widest text-sm font-bold text-primary-container lcd-glow cursor-pointer" onclick="goHome()">SCANDOC 9000</span>
+  <div class="flex items-center gap-2">
+    <span id="headerStatus" class="font-headline text-xs text-primary-container lcd-glow tracking-wider">READY</span>
+    <button onclick="toggleSettings()" class="p-1 text-outline hover:text-primary-container"><span class="material-symbols-outlined text-lg">settings</span></button>
   </div>
 </header>
 
-<!-- ======================== SCANNER VIEW ======================== -->
-<div id="viewScanner" class="view active flex-1 pt-12 pb-16 lg:pb-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+<!-- TAB BAR -->
+<div class="fixed top-12 w-full z-40 flex border-b-2 border-on-surface">
+  <button id="tabUpload" class="tab active flex-1 py-3 font-headline text-xs uppercase tracking-widest text-center border-r border-on-surface/20" onclick="switchTab('upload')">
+    <span class="material-symbols-outlined text-sm mr-1">upload_file</span> Upload PDF
+  </button>
+  <button id="tabScan" class="tab flex-1 py-3 font-headline text-xs uppercase tracking-widest text-center" onclick="switchTab('scan')">
+    <span class="material-symbols-outlined text-sm mr-1">photo_camera</span> Scan Pages
+  </button>
+</div>
 
-  <!-- LEFT: Inputs -->
-  <div class="lg:w-1/2 xl:w-3/5 flex flex-col p-3 md:p-6 gap-3 md:gap-4 lg:overflow-y-auto">
+<!-- MAIN -->
+<main class="pt-24 pb-4 px-4 md:px-8 flex-1">
+  <div class="max-w-4xl mx-auto">
 
-    <!-- Camera viewfinder -->
-    <div class="relative bg-black rounded overflow-hidden scanner-glow" style="aspect-ratio:4/3;">
-      <video id="video" autoplay playsinline muted class="w-full h-full object-cover block" style="transition:transform 0.2s;"></video>
-      <canvas id="motionCanvas" class="hidden"></canvas>
-      <div id="flash"></div>
+    <!-- ============ UPLOAD TAB ============ -->
+    <div id="panelUpload" class="tab-panel">
 
-      <!-- Corner brackets -->
-      <div class="absolute inset-6 pointer-events-none flex flex-col justify-between">
-        <div class="flex justify-between">
-          <div class="w-5 h-5 border-t-2 border-l-2 border-primary-container"></div>
-          <div class="w-5 h-5 border-t-2 border-r-2 border-primary-container"></div>
+      <!-- State: idle (upload zone) -->
+      <div id="uploadIdle">
+        <div id="uploadZone" class="upload-zone border-2 border-dashed border-outline-variant p-12 md:p-16 text-center cursor-pointer hover:bg-surface-container-low transition-colors"
+             onclick="document.getElementById('pdfInput').click()">
+          <span class="material-symbols-outlined text-6xl text-outline mb-4 block">upload_file</span>
+          <div class="font-headline text-xl uppercase tracking-wider mb-2">Drop a PDF here</div>
+          <div class="font-body text-sm text-outline">or click to choose a file</div>
         </div>
-        <div class="flex justify-between">
-          <div class="w-5 h-5 border-b-2 border-l-2 border-primary-container"></div>
-          <div class="w-5 h-5 border-b-2 border-r-2 border-primary-container"></div>
+        <input type="file" id="pdfInput" accept=".pdf" class="hidden"/>
+      </div>
+
+      <!-- State: processing -->
+      <div id="uploadProcessing" style="display:none">
+        <div class="bg-lcd-bg p-6 md:p-8 border-2 border-outline-variant">
+          <div id="jobFilename" class="font-headline text-lg text-primary-container lcd-glow uppercase truncate mb-1"></div>
+          <div id="jobMeta" class="font-mono text-xs text-primary-container/60 mb-4"></div>
+          <div class="h-3 bg-black/30 rounded-full overflow-hidden mb-2">
+            <div id="jobProgressBar" class="h-full bg-primary-container rounded-full transition-all duration-500" style="width:0%"></div>
+          </div>
+          <div id="jobDetail" class="font-mono text-sm text-primary-container/70"></div>
         </div>
       </div>
 
-      <!-- Book preset overlay (rendered by JS) -->
-      <div id="presetOverlay" class="absolute inset-0 pointer-events-none hidden">
-        <div id="presetBox" class="absolute border-2 border-dashed border-primary-container/50"></div>
-        <div id="presetLabel" class="absolute top-2 left-1/2 -translate-x-1/2 font-mono text-[10px] text-primary-container bg-black/60 px-2 py-0.5 uppercase tracking-wider"></div>
-      </div>
-
-      <!-- Scanner sweep (shown during processing) -->
-      <div id="sweepLine" class="scanner-sweep hidden"></div>
-
-      <!-- Motion badge -->
-      <div id="motionBadge" class="absolute top-2 right-2 items-center gap-1.5 bg-black/70 px-2 py-1 rounded-sm">
-        <div id="motionDot" class="w-2 h-2 rounded-full bg-outline"></div>
-        <span id="motionText" class="font-mono text-[10px] text-outline uppercase">OFF</span>
-      </div>
-
-      <!-- Page count -->
-      <div class="absolute bottom-2 right-2 font-mono text-[10px] text-primary-container bg-black/70 px-2 py-1 rounded-sm">
-        <span id="pageCount">0</span> pages
-      </div>
-    </div>
-
-    <!-- Presets row -->
-    <div class="flex gap-2 flex-wrap">
-      <button onclick="setPreset('none')" class="preset-btn bg-primary text-on-primary font-mono text-[10px] px-3 py-1.5 uppercase keycap-sm" data-preset="none">None</button>
-      <button onclick="setPreset('openbook')" class="preset-btn bg-surface-container-high text-on-surface font-mono text-[10px] px-3 py-1.5 uppercase border border-outline-variant keycap-sm" data-preset="openbook">Open Book</button>
-      <button onclick="setPreset('paperback')" class="preset-btn bg-surface-container-high text-on-surface font-mono text-[10px] px-3 py-1.5 uppercase border border-outline-variant keycap-sm" data-preset="paperback">Paperback</button>
-      <button onclick="setPreset('letter')" class="preset-btn bg-surface-container-high text-on-surface font-mono text-[10px] px-3 py-1.5 uppercase border border-outline-variant keycap-sm" data-preset="letter">Letter</button>
-      <button onclick="setPreset('custom')" class="preset-btn bg-surface-container-high text-on-surface font-mono text-[10px] px-3 py-1.5 uppercase border border-outline-variant keycap-sm" data-preset="custom">Custom</button>
-    </div>
-
-    <!-- Status bar -->
-    <div class="bg-surface-container-high px-3 py-2 flex justify-between items-center font-mono text-xs border border-outline-variant">
-      <span>DOC <span id="docNum" class="font-bold">1</span> · <span id="docPages" class="font-bold">0</span> pages</span>
-      <span><span id="doneDocs" class="font-bold">0</span> done · $<span id="sessionCost">0.000</span></span>
-    </div>
-
-    <!-- Action buttons -->
-    <div class="flex gap-3">
-      <button id="btnScan" onclick="capture()" class="flex-[2] bg-primary text-on-primary font-headline font-bold py-3 text-sm uppercase tracking-widest keycap flex items-center justify-center gap-2">
-        <span class="material-symbols-outlined text-lg">photo_camera</span> SCAN PAGE
-      </button>
-      <button id="btnNext" onclick="nextDoc()" disabled class="flex-1 bg-surface-container-high text-on-surface font-headline font-bold py-3 text-xs uppercase tracking-widest border-2 border-on-surface keycap-sm disabled:opacity-30">
-        NEXT DOC
-      </button>
-    </div>
-
-    <!-- Secondary controls -->
-    <div class="flex gap-2 items-center">
-      <button onclick="rotateImage()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm" title="Rotate 90°">↻ <span id="rotLabel">0°</span></button>
-      <button id="btnMotion" onclick="toggleMotion()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">MOTION <span id="motionLabel">ON</span></button>
-      <button onclick="toggleMotionSettings()" class="bg-surface-container-high border border-outline-variant px-2 py-2 text-outline hover:text-primary keycap-sm" title="Motion settings"><span class="material-symbols-outlined text-sm">settings</span></button>
-      <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto bg-tertiary text-on-tertiary font-headline font-bold px-4 py-2 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
-        FINISH
-      </button>
-    </div>
-
-    <!-- Motion settings popover -->
-    <div id="motionSettings" class="hidden bg-surface-container-lowest border border-outline-variant p-4 hard-shadow">
-      <div class="flex justify-between items-center mb-3">
-        <span class="font-headline text-[10px] font-bold uppercase tracking-widest">Motion Settings</span>
-        <button onclick="toggleMotionSettings()" class="text-outline hover:text-on-surface"><span class="material-symbols-outlined text-sm">close</span></button>
-      </div>
-      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Sensitivity</label>
-      <input id="sensitivitySlider" type="range" min="1" max="10" value="5" class="w-full mb-0.5 accent-primary"/>
-      <div class="flex justify-between font-mono text-[9px] text-outline mb-3">
-        <span>Thick pages</span>
-        <span>Thin pages</span>
-      </div>
-      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Capture Delay</label>
-      <input id="delaySlider" type="range" min="0.3" max="3" step="0.1" value="1.0" class="w-full mb-0.5 accent-primary"/>
-      <div class="flex justify-between font-mono text-[9px] text-outline">
-        <span>Snap faster</span>
-        <span>More settling</span>
-      </div>
-    </div>
-
-    <!-- Upload zone -->
-    <div class="flex items-center gap-3 my-1">
-      <div class="h-px bg-outline-variant flex-1"></div>
-      <span class="font-mono text-[10px] text-outline uppercase tracking-widest">or upload PDF</span>
-      <div class="h-px bg-outline-variant flex-1"></div>
-    </div>
-
-    <div id="uploadZone" class="upload-zone border-2 border-dashed border-outline-variant p-6 text-center cursor-pointer hover:bg-surface-container-low transition-colors"
-         onclick="document.getElementById('pdfInput').click()">
-      <span class="material-symbols-outlined text-3xl text-outline mb-2 block">upload_file</span>
-      <span class="font-mono text-[10px] text-outline uppercase tracking-widest">Drop PDF here or click to upload</span>
-    </div>
-    <input type="file" id="pdfInput" accept=".pdf" class="hidden"/>
-    <input type="file" id="photoInput" accept="image/*" capture="environment" multiple class="hidden"/>
-  </div>
-
-  <!-- RIGHT: Jobs Panel (always visible, no toggle, no hidden) -->
-  <div class="lg:w-2/5 bg-surface-container-high lg:border-l border-t lg:border-t-0 border-outline-variant p-4 lg:overflow-y-auto flex flex-col gap-4">
-
-    <!-- Active Job (shown when a job is running) -->
-    <div id="activeJob" style="display:none;">
-      <div class="bg-lcd-bg p-4 border-2 border-outline-variant">
-        <div class="flex justify-between items-start">
-          <div id="jobFilename" class="font-headline text-sm font-bold text-primary-container lcd-glow uppercase truncate"></div>
-          <span id="jobStatusBadge" class="font-mono text-[10px] text-primary-container/70 uppercase ml-2 flex-shrink-0"></span>
+      <!-- State: complete -->
+      <div id="uploadComplete" style="display:none">
+        <div class="bg-surface-container-lowest p-6 md:p-8 border border-outline-variant hard-shadow text-center">
+          <span class="material-symbols-outlined text-5xl text-primary-container mb-3 block">check_circle</span>
+          <div id="resultTitle" class="font-headline text-lg uppercase tracking-tight mb-1"></div>
+          <div id="resultMeta" class="font-mono text-sm text-outline mb-6"></div>
+          <div id="resultLinks" class="flex gap-4 justify-center mb-6"></div>
+          <button onclick="resetUpload()" class="font-headline text-xs uppercase tracking-widest text-primary hover:underline">Upload another PDF</button>
         </div>
-        <div class="h-2 bg-black/30 rounded-full mt-3 overflow-hidden">
-          <div id="jobProgressBar" class="h-full bg-primary-container rounded-full transition-all duration-500" style="width:0%"></div>
-        </div>
-        <div id="jobDetail" class="font-mono text-[10px] text-primary-container/50 mt-2"></div>
-      </div>
-      <div id="jobResult" style="display:none;" class="mt-3 bg-surface-container-lowest p-3 border border-outline-variant hard-shadow">
-        <div class="font-headline text-xs font-bold uppercase text-primary mb-2">COMPLETE</div>
-        <div id="jobResultLinks" class="flex gap-2 flex-wrap"></div>
       </div>
     </div>
 
-    <!-- Job History -->
-    <div>
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mb-2">Jobs</h2>
+    <!-- ============ SCAN TAB ============ -->
+    <div id="panelScan" class="tab-panel" style="display:none">
+      <!-- Camera viewfinder -->
+      <div class="relative bg-black rounded overflow-hidden mb-4" style="aspect-ratio:4/3;max-height:65vh;">
+        <video id="video" autoplay playsinline muted class="w-full h-full object-cover block"></video>
+        <canvas id="motionCanvas" class="hidden"></canvas>
+        <div id="flash"></div>
+        <!-- Motion status bar -->
+        <div class="absolute bottom-0 left-0 right-0 bg-black/80 py-3 px-4 text-center">
+          <span id="motionText" class="font-headline text-sm text-primary-container lcd-glow uppercase tracking-wider">Turn to next page</span>
+        </div>
+        <!-- Page count -->
+        <div class="absolute top-3 right-3 bg-black/70 px-3 py-1.5 font-mono text-sm text-primary-container">
+          <span id="pageCount">0</span> pages
+        </div>
+      </div>
+
+      <!-- Camera controls -->
+      <div class="flex gap-3 mb-3">
+        <button onclick="capture()" class="flex-[2] bg-primary text-on-primary font-headline font-bold py-4 text-sm uppercase tracking-widest keycap flex items-center justify-center gap-2">
+          <span class="material-symbols-outlined text-xl">photo_camera</span> Capture
+        </button>
+        <button id="btnNext" onclick="nextDoc()" disabled class="flex-1 bg-surface-container-high border-2 border-on-surface font-headline font-bold py-4 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
+          Next Doc
+        </button>
+      </div>
+      <div class="flex gap-2 mb-4">
+        <button onclick="rotateImage()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">↻ <span id="rotLabel">0°</span></button>
+        <button onclick="toggleMotion()" class="bg-surface-container-high border border-outline-variant px-3 py-2 font-mono text-xs keycap-sm">Motion <span id="motionLabel">ON</span></button>
+        <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto bg-tertiary text-on-tertiary font-headline font-bold px-6 py-2 text-xs uppercase tracking-widest keycap-sm disabled:opacity-30">
+          Done (<span id="finishCount">0</span> pages)
+        </button>
+      </div>
+    </div>
+
+    <!-- ============ RECENT JOBS (both tabs) ============ -->
+    <div class="mt-6">
+      <h2 class="font-headline text-xs uppercase tracking-widest text-outline border-b border-outline-variant pb-1 mb-3">Recent Jobs</h2>
       <div id="jobList" class="flex flex-col gap-2">
-        <div class="font-mono text-xs text-outline italic">Drop a PDF or scan to get started</div>
+        <div class="font-mono text-xs text-outline italic">No jobs yet</div>
       </div>
     </div>
 
-    <!-- Log area -->
-    <div id="logArea" class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container/70 max-h-40 overflow-y-auto leading-relaxed" style="display:none;"></div>
   </div>
-</div>
+</main>
 
-<!-- ======================== SETTINGS VIEW ======================== -->
-<div id="viewSettings" class="view flex-1 pt-12 pb-16 lg:pb-0 flex-col p-4 md:p-8 overflow-y-auto">
-  <div class="max-w-lg mx-auto w-full flex flex-col gap-6">
-    <h1 class="font-headline text-2xl font-bold uppercase tracking-tighter">Settings</h1>
-
-    <!-- Output Directory -->
-    <div class="bg-surface-container-lowest p-5 border-2 border-primary hard-shadow">
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest border-b border-outline-variant pb-2 mb-3">Save Location</h2>
-      <p class="font-body text-xs text-on-surface-variant mb-3">All scanned documents, PDFs, and text files are saved here. Category subfolders are created automatically.</p>
-      <div class="flex gap-2">
-        <input id="outputPath" type="text" class="flex-1 bg-surface-container-high border border-outline-variant font-mono text-sm px-3 py-2 focus:ring-1 focus:ring-primary" placeholder="~/scandoc-output"/>
-        <button onclick="saveOutputPath()" class="bg-primary text-on-primary font-headline font-bold px-4 py-2 text-xs uppercase tracking-widest keycap-sm">SET</button>
-      </div>
-      <div id="outputStatus" class="font-mono text-[10px] text-outline mt-2"></div>
-    </div>
-
-    <!-- Image Quality -->
-    <div class="bg-lcd-bg p-5 border-2 border-outline-variant">
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest text-primary-container lcd-glow mb-3">Image Quality</h2>
-      <div class="grid grid-cols-2 gap-4 font-mono text-sm text-primary-container">
-        <div>
-          <div class="text-[10px] text-primary-container/60 uppercase">Resolution</div>
-          <div class="lcd-glow">1500px</div>
-        </div>
-        <div>
-          <div class="text-[10px] text-primary-container/60 uppercase">Compression</div>
-          <div class="lcd-glow">JPEG 85%</div>
-        </div>
-      </div>
-      <p class="font-body text-xs text-primary-container/60 mt-3 leading-relaxed">Optimized for OCR. 4K phone photos are downsampled to 1500px long edge — 5x smaller while keeping text sharp for extraction.</p>
-    </div>
-
-    <!-- Book OCR Options -->
-    <div class="bg-surface-container-lowest p-5 border border-outline-variant hard-shadow">
-      <h2 class="font-headline text-xs font-bold uppercase tracking-widest border-b border-outline-variant pb-2 mb-4">Book OCR Options</h2>
-      <label class="flex items-center gap-3 mb-3 cursor-pointer">
-        <input type="checkbox" id="optPageNumbers" class="accent-primary"/>
-        <span class="font-mono text-xs uppercase">Include page numbers</span>
-      </label>
-      <label class="flex items-center gap-3 cursor-pointer">
-        <input type="checkbox" id="optPageBreaks" class="accent-primary"/>
-        <span class="font-mono text-xs uppercase">Include page breaks (---)</span>
-      </label>
-    </div>
-
-    <!-- About -->
-    <div class="bg-surface-container p-5 border border-outline-variant font-mono text-[10px] text-outline uppercase tracking-wider leading-loose">
-      <div class="font-bold text-on-surface text-sm mb-2 tracking-tighter">SCANDOC 9000</div>
-      Model: Gemini 3.1 Flash-Lite<br/>
-      Output: ~/scandoc-output/<br/>
-      Image: 1500px / JPEG 85
-    </div>
-  </div>
-</div>
-
-<!-- ======================== FINISH MODAL ======================== -->
-<div id="finishModal" class="modal-bg fixed inset-0 z-[100] bg-black/60 items-center justify-center">
+<!-- PDF MODAL -->
+<div id="pdfModal" class="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center" style="display:none">
   <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow">
-    <h3 class="font-headline text-lg font-bold uppercase tracking-tighter mb-2">Session Complete</h3>
-    <p id="modalSummary" class="font-mono text-xs text-outline mb-4"></p>
-    <button onclick="classifySession()" class="w-full bg-primary text-on-primary font-headline font-bold py-3 text-sm uppercase tracking-widest keycap mb-3">
-      CLASSIFY & FILE
-    </button>
-    <button onclick="savePdfsOnly()" class="w-full bg-surface-container-high text-on-surface font-headline font-bold py-3 text-xs uppercase tracking-widest border-2 border-on-surface keycap-sm mb-3">
-      JUST SAVE PDFs
-    </button>
-    <button onclick="closeModal()" class="w-full font-mono text-xs text-outline uppercase py-2">Cancel</button>
-  </div>
-</div>
-
-<!-- ======================== PDF MODAL ======================== -->
-<div id="pdfChoice" class="hidden fixed inset-0 z-[100] bg-black/60 flex items-center justify-center">
-  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow">
-    <h3 id="pdfChoiceTitle" class="font-headline text-sm font-bold uppercase tracking-tighter mb-2 break-all"></h3>
-
-    <!-- Quick scan results -->
+    <h3 id="pdfModalTitle" class="font-headline text-sm font-bold uppercase tracking-tighter mb-2 break-all"></h3>
     <div class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container mb-4 leading-relaxed">
       <div id="pdfScanInfo"></div>
     </div>
-
     <button onclick="runOcr()" class="w-full bg-primary text-on-primary font-headline font-bold py-4 text-sm uppercase tracking-widest keycap flex flex-col items-center gap-1">
       <span>RUN OCR</span>
       <span id="ocrCost" class="text-[10px] font-normal opacity-70"></span>
     </button>
-    <button onclick="closePdfChoice()" class="w-full font-mono text-xs text-outline uppercase py-2 mt-2">Cancel</button>
+    <button onclick="closePdfModal()" class="w-full font-mono text-xs text-outline uppercase py-2 mt-2">Cancel</button>
   </div>
 </div>
 
-<!-- ======================== MOBILE BOTTOM NAV ======================== -->
-<nav class="lg:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-stretch h-14 bg-surface-container-high border-t-2 border-on-surface">
-  <button onclick="showView('scanner')" class="nav-tab flex flex-col items-center justify-center flex-1 bg-primary-container text-on-primary-container -translate-y-0.5 shadow-[0_2px_0_0_#1e1c10]" data-view="scanner">
-    <span class="material-symbols-outlined text-lg" style="font-variation-settings:'FILL' 1;">barcode_scanner</span>
-    <span class="font-headline text-[9px] font-bold uppercase mt-0.5">Scan</span>
-  </button>
-  <button onclick="showView('settings')" class="nav-tab flex flex-col items-center justify-center flex-1 text-outline" data-view="settings">
-    <span class="material-symbols-outlined text-lg">settings</span>
-    <span class="font-headline text-[9px] font-bold uppercase mt-0.5">Settings</span>
-  </button>
-</nav>
+<!-- FINISH SCANNING MODAL -->
+<div id="finishModal" class="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center" style="display:none">
+  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow">
+    <h3 class="font-headline text-lg font-bold uppercase tracking-tighter mb-2">Session Complete</h3>
+    <p id="finishSummary" class="font-mono text-xs text-outline mb-4"></p>
+    <button onclick="classifySession()" class="w-full bg-primary text-on-primary font-headline font-bold py-3 text-sm uppercase tracking-widest keycap mb-3">Classify & File</button>
+    <button onclick="closeFinishModal()" class="w-full font-mono text-xs text-outline uppercase py-2">Cancel</button>
+  </div>
+</div>
+
+<!-- SETTINGS OVERLAY -->
+<div id="settingsOverlay" class="fixed inset-0 z-[90] bg-black/60 flex items-center justify-center" style="display:none">
+  <div class="bg-surface-container-lowest border-2 border-on-surface p-6 max-w-sm w-[90%] hard-shadow max-h-[80vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="font-headline text-lg font-bold uppercase tracking-tighter">Settings</h2>
+      <button onclick="toggleSettings()" class="text-outline hover:text-on-surface"><span class="material-symbols-outlined">close</span></button>
+    </div>
+    <div class="mb-4">
+      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Save Location</label>
+      <div class="flex gap-2">
+        <input id="outputPath" type="text" class="flex-1 bg-surface-container-high border border-outline-variant font-mono text-sm px-3 py-2"/>
+        <button onclick="saveOutputPath()" class="bg-primary text-on-primary font-headline font-bold px-3 py-2 text-xs uppercase keycap-sm">Set</button>
+      </div>
+      <div id="outputStatus" class="font-mono text-[10px] text-outline mt-1"></div>
+    </div>
+    <div class="mb-4">
+      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Motion Sensitivity</label>
+      <input id="sensitivitySlider" type="range" min="1" max="10" value="5" class="w-full accent-primary"/>
+      <div class="flex justify-between font-mono text-[9px] text-outline"><span>Thick pages</span><span>Thin pages</span></div>
+    </div>
+    <div class="mb-4">
+      <label class="font-mono text-[10px] text-on-surface-variant uppercase block mb-1">Capture Delay</label>
+      <input id="delaySlider" type="range" min="0.3" max="3" step="0.1" value="1.0" class="w-full accent-primary"/>
+      <div class="flex justify-between font-mono text-[9px] text-outline"><span>Faster</span><span>More settling</span></div>
+    </div>
+    <div class="bg-lcd-bg p-3 font-mono text-[10px] text-primary-container">
+      Resolution: 1500px · JPEG 85%<br/>Model: Gemini 3.1 Flash-Lite
+    </div>
+  </div>
+</div>
 
 <script>
 // ==================== STATE ====================
-let stream = null, rotation = 0, totalPages = 0, currentDocPages = 0;
-let motionEnabled = true, motionPrev = null, motionState = 'idle';
-let motionStableStart = null, motionCooldownStart = null;
-let currentPreset = 'none', pendingPdfFile = null;
-let polling = false;
-const shownDocs = new Set(); // track which completed docs we've already displayed
+let stream=null,rotation=0,totalPages=0,currentDocPages=0;
+let motionEnabled=true,motionPrev=null,motionState='idle';
+let motionStableStart=null,motionCooldownStart=null;
+let pendingPdfFile=null,activeJobId=null;
+const M_THRESH=8,S_THRESH=3,S_DELAY=1.0,COOLDOWN=2.0;
+const LIBRARY_KEY='scandoc9000_library';
 
-const PRESETS = {
-  none:      { ratio: null, label: '' },
-  openbook:  { ratio: 12/9,    label: 'Open Book 12×9' },
-  paperback: { ratio: 6/9,     label: 'Paperback 6×9' },
-  letter:    { ratio: 8.5/11,  label: 'Letter 8.5×11' },
-  custom:    { ratio: null,    label: 'Custom' },
-};
-const M_THRESH = 8, S_THRESH = 3, S_DELAY = 1.0, COOLDOWN = 2.0;
+// ==================== TABS ====================
+function switchTab(tab){
+  document.getElementById('tabUpload').classList.toggle('active',tab==='upload');
+  document.getElementById('tabScan').classList.toggle('active',tab==='scan');
+  document.getElementById('panelUpload').style.display=tab==='upload'?'block':'none';
+  document.getElementById('panelScan').style.display=tab==='scan'?'block':'none';
+  if(tab==='scan'&&!stream) startCamera();
+  if(tab==='scan'&&motionEnabled) setTimeout(()=>requestAnimationFrame(motionLoop),1000);
+}
+function goHome(){
+  switchTab('upload');
+  resetUpload();
+}
 
-// ==================== VIEW SWITCHING ====================
-function showView(name) {
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view' + name.charAt(0).toUpperCase() + name.slice(1)).classList.add('active');
-  // Update nav tabs
-  document.querySelectorAll('.nav-tab').forEach(t => {
-    t.classList.remove('bg-primary-container','text-on-primary-container','-translate-y-0.5');
-    t.classList.add('text-outline');
-    if (t.dataset.view === name) {
-      t.classList.add('bg-primary-container','text-on-primary-container','-translate-y-0.5');
-      t.classList.remove('text-outline');
-    }
-  });
-  // Update header icons
-  document.querySelectorAll('header button').forEach(b => b.querySelector('.material-symbols-outlined').classList.remove('text-primary-container'));
+// ==================== UPLOAD STATES ====================
+function showUploadState(state){
+  document.getElementById('uploadIdle').style.display=state==='idle'?'block':'none';
+  document.getElementById('uploadProcessing').style.display=state==='processing'?'block':'none';
+  document.getElementById('uploadComplete').style.display=state==='complete'?'block':'none';
+}
+function resetUpload(){
+  showUploadState('idle');
+  document.getElementById('headerStatus').textContent='READY';
 }
 
 // ==================== CAMERA ====================
-async function startCamera() {
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} }
-    });
-    document.getElementById('video').srcObject = stream;
-  } catch(e) { console.error('Camera error:', e); }
+async function startCamera(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}});
+    document.getElementById('video').srcObject=stream;
+  }catch(e){console.error('Camera:',e);}
+}
+function rotateImage(){
+  rotation=(rotation+90)%360;
+  document.getElementById('rotLabel').textContent=rotation+'\u00B0';
+  const v=document.getElementById('video');
+  v.style.transform='rotate('+rotation+'deg)';
+  v.style.objectFit=(rotation===90||rotation===270)?'contain':'cover';
 }
 
-// ==================== ROTATION ====================
-function rotateImage() {
-  rotation = (rotation + 90) % 360;
-  document.getElementById('rotLabel').textContent = rotation + '\u00B0';
-  const v = document.getElementById('video');
-  v.style.transform = 'rotate(' + rotation + 'deg)';
-  v.style.objectFit = (rotation === 90 || rotation === 270) ? 'contain' : 'cover';
+// ==================== MOTION ====================
+function toggleMotion(){
+  motionEnabled=!motionEnabled;
+  document.getElementById('motionLabel').textContent=motionEnabled?'ON':'OFF';
+  motionPrev=null;motionState='idle';
+  if(motionEnabled) requestAnimationFrame(motionLoop);
 }
-
-// ==================== PRESETS ====================
-function setPreset(name) {
-  currentPreset = name;
-  document.querySelectorAll('.preset-btn').forEach(b => {
-    b.classList.remove('bg-primary','text-on-primary');
-    b.classList.add('bg-surface-container-high','text-on-surface','border','border-outline-variant');
-  });
-  const active = document.querySelector('[data-preset="'+name+'"]');
-  if (active) {
-    active.classList.add('bg-primary','text-on-primary');
-    active.classList.remove('bg-surface-container-high','text-on-surface','border','border-outline-variant');
-  }
-  const overlay = document.getElementById('presetOverlay');
-  const p = PRESETS[name];
-  if (!p || !p.ratio) { overlay.classList.add('hidden'); return; }
-  overlay.classList.remove('hidden');
-  document.getElementById('presetLabel').textContent = p.label;
-  // Calculate box position (8% padding)
-  const pad = 0.08, maxW = 1 - 2*pad, maxH = 1 - 2*pad;
-  let w, h;
-  if (p.ratio > 1) { w = maxW; h = maxW / p.ratio; }
-  else { h = maxH; w = maxH * p.ratio; }
-  if (w > maxW) { w = maxW; h = w / p.ratio; }
-  if (h > maxH) { h = maxH; w = h * p.ratio; }
-  const box = document.getElementById('presetBox');
-  box.style.left = ((1-w)/2*100)+'%'; box.style.top = ((1-h)/2*100)+'%';
-  box.style.width = (w*100)+'%'; box.style.height = (h*100)+'%';
-}
-
-// ==================== MOTION DETECTION ====================
-function toggleMotion() {
-  motionEnabled = !motionEnabled;
-  document.getElementById('motionLabel').textContent = motionEnabled ? 'ON' : 'OFF';
-  const badge = document.getElementById('motionBadge');
-  badge.classList.toggle('on', motionEnabled);
-  motionPrev = null; motionState = 'idle';
-  if (motionEnabled) requestAnimationFrame(motionLoop);
-}
-
-function motionLoop() {
-  if (!motionEnabled) return;
-  const video = document.getElementById('video');
-  if (!video.videoWidth) { requestAnimationFrame(motionLoop); return; }
-  const c = document.getElementById('motionCanvas');
-  const w=160, h=120; c.width=w; c.height=h;
-  const ctx = c.getContext('2d',{willReadFrequently:true});
+function motionLoop(){
+  if(!motionEnabled) return;
+  const video=document.getElementById('video');
+  if(!video.videoWidth){requestAnimationFrame(motionLoop);return;}
+  const c=document.getElementById('motionCanvas');
+  const w=160,h=120;c.width=w;c.height=h;
+  const ctx=c.getContext('2d',{willReadFrequently:true});
   ctx.drawImage(video,0,0,w,h);
-  const d = ctx.getImageData(0,0,w,h).data;
-  const gray = new Float32Array(w*h);
+  const d=ctx.getImageData(0,0,w,h).data;
+  const gray=new Float32Array(w*h);
   for(let i=0;i<w*h;i++) gray[i]=d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114;
-
-  const dot = document.getElementById('motionDot');
-  const txt = document.getElementById('motionText');
+  const txt=document.getElementById('motionText');
   if(motionPrev){
     let diff=0;
     for(let i=0;i<gray.length;i++) diff+=Math.abs(gray[i]-motionPrev[i]);
     const delta=diff/gray.length;
     const now=performance.now()/1000;
-    if(motionState==='idle'){ txt.textContent='WAITING'; dot.className='w-2 h-2 rounded-full bg-outline'; if(delta>M_THRESH) motionState='turning'; }
-    else if(motionState==='turning'){ txt.textContent='TURNING'; dot.className='w-2 h-2 rounded-full bg-tertiary-container animate-pulse'; if(delta<S_THRESH){motionState='stabilizing';motionStableStart=now;} }
-    else if(motionState==='stabilizing'){ const el=now-motionStableStart; txt.textContent='STABLE '+el.toFixed(1)+'s'; dot.className='w-2 h-2 rounded-full bg-primary-container'; if(delta>S_THRESH) motionState='turning'; else if(el>=S_DELAY){capture();motionState='cooldown';motionCooldownStart=now;} }
-    else if(motionState==='cooldown'){ const el=now-motionCooldownStart; txt.textContent='WAIT '+(COOLDOWN-el).toFixed(1)+'s'; dot.className='w-2 h-2 rounded-full bg-outline'; if(el>=COOLDOWN) motionState='idle'; }
+    if(motionState==='idle'){txt.textContent='Turn to next page';if(delta>M_THRESH) motionState='turning';}
+    else if(motionState==='turning'){txt.textContent='Page turning...';if(delta<S_THRESH){motionState='stabilizing';motionStableStart=now;}}
+    else if(motionState==='stabilizing'){const el=now-motionStableStart;txt.textContent='Hold still... '+Math.max(0,S_DELAY-el).toFixed(1)+'s';if(delta>S_THRESH) motionState='turning';else if(el>=S_DELAY){capture();motionState='cooldown';motionCooldownStart=now;txt.textContent='Captured!';}}
+    else if(motionState==='cooldown'){txt.textContent='Got it! Turn page.';if((now-motionCooldownStart)>=COOLDOWN) motionState='idle';}
   }
   motionPrev=gray;
   requestAnimationFrame(motionLoop);
 }
 
 // ==================== CAPTURE ====================
-async function capture() {
-  const video = document.getElementById('video');
-  const canvas = document.createElement('canvas');
-  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+async function capture(){
+  const video=document.getElementById('video');
+  const canvas=document.createElement('canvas');
+  canvas.width=video.videoWidth;canvas.height=video.videoHeight;
   canvas.getContext('2d').drawImage(video,0,0);
-  const flash = document.getElementById('flash');
-  flash.classList.add('fire'); setTimeout(()=>flash.classList.remove('fire'),150);
-  await sendCapture(canvas.toDataURL('image/jpeg',0.92));
-}
-
-async function sendCapture(dataUrl) {
-  const res = await fetch('/api/capture',{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({image:dataUrl, rotation:rotation})
-  });
-  const data = await res.json();
+  const flash=document.getElementById('flash');
+  flash.classList.add('fire');setTimeout(()=>flash.classList.remove('fire'),150);
+  const res=await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:canvas.toDataURL('image/jpeg',0.92),rotation})});
+  const data=await res.json();
   if(data.ok!==false){
-    totalPages++; currentDocPages=data.total_pages;
+    totalPages++;currentDocPages=data.total_pages;
     document.getElementById('pageCount').textContent=totalPages;
-    document.getElementById('docPages').textContent=currentDocPages;
     document.getElementById('btnNext').disabled=false;
     document.getElementById('btnFinish').disabled=false;
+    document.getElementById('finishCount').textContent=totalPages;
   }
 }
-
-// ==================== NEXT DOC / FINISH ====================
-async function nextDoc() {
-  const res = await fetch('/api/next-doc',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  currentDocPages=0;
-  document.getElementById('btnNext').disabled=true;
-  document.getElementById('docPages').textContent='0';
-  showLog(); startPolling(); refreshState();
+async function nextDoc(){
+  await fetch('/api/next-doc',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  currentDocPages=0;document.getElementById('btnNext').disabled=true;
 }
-
-async function finishScanning() {
-  const res = await fetch('/api/finish-scanning',{method:'POST'});
-  const data = await res.json();
+async function finishScanning(){
+  const res=await fetch('/api/finish-scanning',{method:'POST'});
+  const data=await res.json();
   if(data.ok){
-    document.getElementById('modalSummary').textContent =
-      data.doc_count+' documents \u00B7 '+data.page_count+' pages \u00B7 Est. $'+data.estimated_cost.toFixed(3);
-    document.getElementById('finishModal').classList.add('open');
+    document.getElementById('finishSummary').textContent=data.doc_count+' docs \u00B7 '+data.page_count+' pages \u00B7 ~$'+data.estimated_cost.toFixed(3);
+    document.getElementById('finishModal').style.display='flex';
   }
 }
-
-async function classifySession() {
-  closeModal();
-  const res = await fetch('/api/classify-session',{method:'POST'});
-  showLog(); startPolling();
+async function classifySession(){
+  document.getElementById('finishModal').style.display='none';
+  switchTab('upload');
+  showUploadState('processing');
+  document.getElementById('jobFilename').textContent='Classifying documents...';
+  document.getElementById('headerStatus').textContent='CLASSIFYING...';
+  await fetch('/api/classify-session',{method:'POST'});
+  pollClassify();
 }
-
-async function savePdfsOnly() {
-  closeModal();
-  // TODO: save PDFs without classification
-  refreshState();
-}
-
-function closeModal() { document.getElementById('finishModal').classList.remove('open'); }
+function closeFinishModal(){document.getElementById('finishModal').style.display='none';}
 
 // ==================== PDF UPLOAD ====================
-const uploadZone = document.getElementById('uploadZone');
-uploadZone.addEventListener('dragover', e=>{e.preventDefault();uploadZone.classList.add('dragover');});
-uploadZone.addEventListener('dragleave', ()=>uploadZone.classList.remove('dragover'));
-uploadZone.addEventListener('drop', e=>{e.preventDefault();uploadZone.classList.remove('dragover');handlePdf(e.dataTransfer.files[0]);});
-document.getElementById('pdfInput').addEventListener('change', e=>{if(e.target.files[0])handlePdf(e.target.files[0]);e.target.value='';});
+const uploadZone=document.getElementById('uploadZone');
+uploadZone.addEventListener('dragover',e=>{e.preventDefault();uploadZone.classList.add('dragover');});
+uploadZone.addEventListener('dragleave',()=>uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop',e=>{e.preventDefault();uploadZone.classList.remove('dragover');if(e.dataTransfer.files[0])handlePdf(e.dataTransfer.files[0]);});
+document.getElementById('pdfInput').addEventListener('change',e=>{if(e.target.files[0])handlePdf(e.target.files[0]);e.target.value='';});
 
-async function handlePdf(file) {
-  if(!file || !file.name.toLowerCase().endsWith('.pdf')) return;
-  // Show upload feedback immediately
-  const zone = document.getElementById('uploadZone');
-  const origHTML = zone.innerHTML;
-  zone.innerHTML = '<span class="material-symbols-outlined text-3xl text-primary animate-pulse block mb-2">hourglass_top</span><span class="font-mono text-[10px] text-primary uppercase tracking-widest">Uploading ' + file.name + '...</span>';
-
-  const formData = new FormData(); formData.append('file',file);
-  const res = await fetch('/api/upload-pdf',{method:'POST',body:formData});
-  const data = await res.json();
-  zone.innerHTML = origHTML; // restore
+async function handlePdf(file){
+  if(!file||!file.name.toLowerCase().endsWith('.pdf')) return;
+  const orig=uploadZone.innerHTML;
+  uploadZone.innerHTML='<span class="material-symbols-outlined text-6xl text-primary animate-pulse block mb-4">hourglass_top</span><div class="font-headline text-xl uppercase">Uploading...</div>';
+  const fd=new FormData();fd.append('file',file);
+  const res=await fetch('/api/upload-pdf',{method:'POST',body:fd});
+  const data=await res.json();
+  uploadZone.innerHTML=orig;
   if(!data.ok) return;
-  pendingPdfFile = data;
-  document.getElementById('pdfChoiceTitle').textContent = data.filename;
-
-  const qs = data.quick_scan || {};
-  const pages = qs.page_count || data.page_count;
-
-  // Build quick scan info for LCD panel
-  let info = pages + ' pages';
-  if (qs.density) info += ' \u00B7 ' + qs.density;
-  if (qs.avg_words_per_page) info += ' \u00B7 ~' + qs.avg_words_per_page + ' words/page';
-  if (!qs.has_text_layer) info += '\nImage-only (no text layer)';
-  if (qs.est_total_words) info += '\n~' + qs.est_total_words.toLocaleString() + ' total words';
-  if (qs.detected_header) info += '\nHeader: "' + qs.detected_header + '"';
-  if (qs.detected_footer) info += '\nFooter: "' + qs.detected_footer + '"';
-  document.getElementById('pdfScanInfo').textContent = info;
-
-  // Cost — use book OCR cost for >20 pages, classify cost for shorter
-  const isBook = pages > 20;
-  const cost = isBook ? data.book_cost : data.classify_cost;
-  const timeStr = qs.est_time_display || (isBook ? '~' + Math.round(pages * 4 / 60) + 'min' : '~' + (pages * 3) + 's');
-  document.getElementById('ocrCost').textContent = '~$' + cost.toFixed(3) + ' / ' + timeStr;
-
-  document.getElementById('pdfChoice').classList.remove('hidden');
+  pendingPdfFile=data;
+  document.getElementById('pdfModalTitle').textContent=data.filename;
+  const qs=data.quick_scan||{};
+  const pages=qs.page_count||data.page_count;
+  let info=pages+' pages';
+  if(qs.density) info+=' \u00B7 '+qs.density;
+  if(qs.avg_words_per_page) info+=' \u00B7 ~'+qs.avg_words_per_page+' words/page';
+  if(qs.est_total_words) info+='\n~'+qs.est_total_words.toLocaleString()+' total words';
+  if(qs.detected_header) info+='\nHeader: "'+qs.detected_header+'"';
+  if(!qs.has_text_layer) info+='\nImage-only (scanned)';
+  document.getElementById('pdfScanInfo').textContent=info;
+  const isBook=pages>20;
+  const cost=isBook?data.book_cost:data.classify_cost;
+  const timeStr=qs.est_time_display||(isBook?'~'+Math.round(pages*4/60)+'min':'~'+(pages*3)+'s');
+  document.getElementById('ocrCost').textContent='~$'+cost.toFixed(3)+' / '+timeStr;
+  document.getElementById('pdfModal').style.display='flex';
 }
 
-async function runOcr() {
-  const pf = pendingPdfFile;
-  closePdfChoice();
-  if(!pf) return;
-  const pages = (pf.quick_scan || {}).page_count || pf.page_count;
-  const isBook = pages > 20;
-
-  showActiveJob(pf.filename, isBook ? 'STARTING OCR...' : 'PROCESSING...');
-  document.getElementById('headerStatus').textContent = isBook ? 'OCR STARTING...' : 'PROCESSING...';
-
-  if (isBook) {
-    // Long doc — use chunked Book OCR pipeline
+async function runOcr(){
+  const pf=pendingPdfFile;closePdfModal();if(!pf) return;
+  const pages=(pf.quick_scan||{}).page_count||pf.page_count;
+  const isBook=pages>20;
+  showUploadState('processing');
+  document.getElementById('jobFilename').textContent=pf.filename;
+  document.getElementById('jobMeta').textContent=pages+' pages';
+  document.getElementById('jobProgressBar').style.width='0%';
+  document.getElementById('jobDetail').textContent='Starting...';
+  document.getElementById('headerStatus').textContent='PROCESSING...';
+  activeJobId=pf.job_id;
+  if(isBook){
     await fetch('/api/start-book-ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
     pollBookJob(pf.job_id);
-  } else {
-    // Short doc — classify & file
+  }else{
     await fetch('/api/start-classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:pf.job_id})});
-    showLog(); startPolling();
+    pollClassify();
   }
 }
+function closePdfModal(){document.getElementById('pdfModal').style.display='none';pendingPdfFile=null;}
 
-function closePdfChoice() { document.getElementById('pdfChoice').classList.add('hidden'); pendingPdfFile=null; }
-
-// ==================== JOB PANEL ====================
-function showActiveJob(filename, status) {
-  const el = document.getElementById('activeJob');
-  el.style.display = 'block';
-  document.getElementById('jobFilename').textContent = filename;
-  document.getElementById('jobStatusBadge').textContent = status;
-  document.getElementById('jobProgressBar').style.width = '0%';
-  document.getElementById('jobDetail').textContent = '';
-  document.getElementById('jobResult').style.display = 'none';
-}
-
-function updateJobProgress(pct, detail, status) {
-  document.getElementById('jobProgressBar').style.width = pct + '%';
-  document.getElementById('jobDetail').textContent = detail || '';
-  if (status) document.getElementById('jobStatusBadge').textContent = status;
-}
-
-function showJobComplete(links) {
-  document.getElementById('jobStatusBadge').textContent = 'COMPLETE';
-  document.getElementById('jobProgressBar').style.width = '100%';
-  document.getElementById('jobDetail').textContent = ''; // clear chunk status
-  const result = document.getElementById('jobResult');
-  result.style.display = 'block';
-  document.getElementById('jobResultLinks').innerHTML = links;
-  document.getElementById('headerStatus').textContent = 'READY';
-  // Add to job history
-  addToJobHistory(document.getElementById('jobFilename').textContent, 'complete', links);
-}
-
-function addToJobHistory(filename, status, links) {
-  const list = document.getElementById('jobList');
-  // Remove "no jobs" placeholder
-  if (list.querySelector('.italic')) list.innerHTML = '';
-  const item = document.createElement('div');
-  item.className = 'bg-surface-container-lowest p-2.5 border border-outline-variant';
-  item.innerHTML = '<div class="flex justify-between items-center"><span class="font-mono text-[11px] font-bold uppercase truncate">' + filename + '</span><span class="font-mono text-[9px] text-primary-container uppercase">' + status + '</span></div>' + (links ? '<div class="flex gap-2 mt-1">' + links + '</div>' : '');
-  list.prepend(item);
-}
-
-// Book OCR poller — updates the job panel in real time
-async function pollBookJob(jobId) {
-  const log = document.getElementById('logArea');
-  log.style.display = 'block';
-  log.textContent = 'Starting...';
-  let lastChunk = '';
-
-  async function poll() {
-    try {
-      const res = await fetch('/api/book-status/' + jobId);
-      const job = await res.json();
-
-      if (job.status === 'processing') {
-        const pct = job.progress || 0;
-        const chunk = job.current_chunk || 'Analyzing document...';
-        updateJobProgress(pct, chunk, 'PROCESSING ' + pct + '%');
-        document.getElementById('headerStatus').textContent = 'BOOK OCR ' + pct + '%';
-        // Only append to log when status actually changes
-        if (chunk !== lastChunk) {
-          log.textContent += '\n[' + pct + '%] ' + chunk;
-          log.scrollTop = log.scrollHeight;
-          lastChunk = chunk;
-        }
-        setTimeout(poll, 2000);
-      } else if (job.status === 'complete') {
-        document.getElementById('headerStatus').textContent = 'COMPLETE';
-        const links = '<a href="/api/book-download/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">DOWNLOAD .MD</a>' +
-          '<a href="/api/book-download-docx/' + jobId + '" class="font-mono text-[10px] text-primary border border-primary px-2 py-1 uppercase hover:bg-primary hover:text-on-primary transition-colors">DOWNLOAD .DOCX</a>';
-        showJobComplete(links);
-        log.textContent += '\nComplete! ' + (job.total_time ? job.total_time.toFixed(1) + 's' : '');
-      } else if (job.status === 'error') {
-        document.getElementById('headerStatus').textContent = 'ERROR';
-        updateJobProgress(0, 'Error: ' + (job.error || 'Unknown'), 'ERROR');
-        log.textContent += '\nError: ' + (job.error || 'Unknown');
-      } else {
-        updateJobProgress(0, 'Starting...', 'STARTING');
-        setTimeout(poll, 1000);
-      }
-    } catch(e) { console.error('Poll error:', e); }
+// ==================== POLLING ====================
+async function pollBookJob(jobId){
+  let lastChunk='';
+  async function poll(){
+    try{
+      const job=await(await fetch('/api/book-status/'+jobId)).json();
+      if(job.status==='processing'){
+        const pct=job.progress||0;const chunk=job.current_chunk||'Analyzing...';
+        document.getElementById('jobProgressBar').style.width=pct+'%';
+        if(chunk!==lastChunk){document.getElementById('jobDetail').textContent=chunk;lastChunk=chunk;}
+        document.getElementById('headerStatus').textContent='OCR '+pct+'%';
+        setTimeout(poll,2000);
+      }else if(job.status==='complete'){
+        showComplete(jobId,document.getElementById('jobFilename').textContent,job.total_time);
+      }else if(job.status==='error'){
+        document.getElementById('jobDetail').textContent='Error: '+(job.error||'Unknown');
+        document.getElementById('headerStatus').textContent='ERROR';
+      }else{setTimeout(poll,1000);}
+    }catch(e){console.error(e);}
   }
   poll();
 }
 
-// ==================== POLLING / STATE ====================
-function startPolling() { if(!polling){polling=true;pollStatus();} }
-
-async function pollStatus() {
-  try {
-    const res = await fetch('/api/state');
-    const state = await res.json();
-    if(state.session_cost>0) document.getElementById('headerCost').textContent='$'+state.session_cost.toFixed(3);
-    document.getElementById('sessionCost').textContent=state.session_cost.toFixed(3);
-    document.getElementById('docNum').textContent=state.current_doc?state.current_doc.replace('doc_',''):'1';
-    document.getElementById('doneDocs').textContent=state.completed_docs||0;
-
-    const active = (state.documents||[]).filter(d=>['queued','processing'].includes(d.status));
-    const done = (state.documents||[]).filter(d=>['classified','filed'].includes(d.status));
-
-    // Update active job panel for classify jobs
-    if (active.length > 0) {
-      const d = active[0];
-      showActiveJob(d.title || d.id, d.status.toUpperCase());
-      updateJobProgress(0, d.status + '...', d.status.toUpperCase());
-    }
-
-    // When classify jobs complete, show result with category badge
-    done.forEach(d => {
-      const key = d.id + '|' + (d.title||'');
-      if (!shownDocs.has(key)) {
-        shownDocs.add(key);
-        const catBadge = '<span class="font-mono text-[9px] bg-primary-container text-on-primary-container px-1.5 py-0.5 uppercase">' + (d.category||'misc') + '</span>';
-        showJobComplete(catBadge + ' <span class="font-mono text-[10px]">' + (d.title||d.id) + '</span>');
-      }
-    });
-
-    // Update log
-    if(state.process_log && state.process_log.length>0){
-      const log = document.getElementById('logArea');
-      log.style.display = 'block';
-      log.textContent = state.process_log.join('\n');
-      log.scrollTop = log.scrollHeight;
-    }
-
-    syncResultsToLocal(state.documents);
-
-    const hasActive = active.length>0 || (state.documents||[]).some(d=>d.status==='queued');
-    if(hasActive) setTimeout(pollStatus,1000); else {
-      polling=false;
-      refreshState();
-      document.getElementById('headerStatus').textContent = 'READY';
-    }
-  } catch(e) { polling=false; }
-}
-
-async function refreshState() {
-  try {
-    const res = await fetch('/api/state');
-    const state = await res.json();
-    document.getElementById('docNum').textContent=state.current_doc?state.current_doc.replace('doc_',''):'1';
-    document.getElementById('docPages').textContent=state.current_pages||0;
-    document.getElementById('doneDocs').textContent=state.completed_docs||0;
-    if(state.session_cost>0){
-      document.getElementById('sessionCost').textContent=state.session_cost.toFixed(3);
-      document.getElementById('headerCost').textContent='$'+state.session_cost.toFixed(3);
-    }
-    document.getElementById('headerStatus').textContent=
-      (state.documents||[]).some(d=>d.status==='processing')?'PROCESSING':'READY';
-  } catch(e) {}
-}
-
-function showLog() { document.getElementById('logArea').classList.remove('hidden'); }
-
-// ==================== LOCAL LIBRARY (localStorage) ====================
-let currentFilter = 'all';
-const LIBRARY_KEY = 'scandoc9000_library';
-
-function getLocalLibrary() {
-  try { return JSON.parse(localStorage.getItem(LIBRARY_KEY) || '[]'); } catch(e) { return []; }
-}
-
-function saveToLocalLibrary(doc) {
-  const lib = getLocalLibrary();
-  // Avoid duplicates by doc_id + title
-  const exists = lib.findIndex(d => d.doc_id === doc.doc_id && d.title === doc.title);
-  if (exists >= 0) lib[exists] = doc;
-  else lib.push(doc);
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(lib));
-}
-
-function clearLocalLibrary() {
-  if (confirm('Clear all job history from this browser?')) {
-    localStorage.removeItem(LIBRARY_KEY);
-    document.getElementById('jobList').innerHTML = '<div class="font-mono text-xs text-outline italic">No jobs yet</div>';
+async function pollClassify(){
+  async function poll(){
+    try{
+      const state=await(await fetch('/api/state')).json();
+      const active=(state.documents||[]).filter(d=>['queued','processing'].includes(d.status));
+      const done=(state.documents||[]).filter(d=>['classified','filed'].includes(d.status));
+      if(active.length>0){
+        document.getElementById('jobDetail').textContent=active[0].status+'...';
+        setTimeout(poll,1000);
+      }else if(done.length>0){
+        const d=done[done.length-1];
+        showComplete(null,(d.title||d.id)+' ['+d.category+']',d.processing_time);
+        syncToLocal(state.documents);
+      }else{resetUpload();}
+    }catch(e){setTimeout(poll,2000);}
   }
+  poll();
 }
 
-// Save completed docs from poll results into localStorage
-function syncResultsToLocal(documents) {
-  (documents || []).filter(d => ['classified','filed'].includes(d.status)).forEach(d => {
-    saveToLocalLibrary({
-      doc_id: d.id, category: d.category || 'misc', title: d.title || d.id,
-      slug: d.id, date: new Date().toISOString().slice(0,10),
-      summary: d.summary || '', page_count: d.pages || 0,
-      processing_time: d.processing_time || 0, cost: d.cost || 0,
-      scanned_at: new Date().toISOString(),
-    });
-  });
+// ==================== COMPLETE ====================
+function showComplete(jobId,title,time){
+  showUploadState('complete');
+  document.getElementById('resultTitle').textContent=title;
+  document.getElementById('resultMeta').textContent=(time?time.toFixed(1)+'s':'')+(jobId?' \u00B7 Book OCR':'');
+  document.getElementById('headerStatus').textContent='COMPLETE';
+  let links='';
+  if(jobId){
+    links+='<a href="/api/book-download/'+jobId+'" class="bg-primary text-on-primary font-headline font-bold py-3 px-6 text-sm uppercase tracking-widest keycap-sm">.MD</a>';
+    links+='<a href="/api/book-download-docx/'+jobId+'" class="bg-surface-container-high border-2 border-on-surface font-headline font-bold py-3 px-6 text-sm uppercase tracking-widest keycap-sm">.DOCX</a>';
+  }
+  document.getElementById('resultLinks').innerHTML=links;
+  addToHistory(title,'done',links);
+}
+
+// ==================== JOB HISTORY ====================
+function getLocal(){try{return JSON.parse(localStorage.getItem(LIBRARY_KEY)||'[]');}catch(e){return[];}}
+function saveLocal(doc){const lib=getLocal();lib.push(doc);localStorage.setItem(LIBRARY_KEY,JSON.stringify(lib));}
+function syncToLocal(docs){(docs||[]).filter(d=>['classified','filed'].includes(d.status)).forEach(d=>{
+  saveLocal({doc_id:d.id,category:d.category||'misc',title:d.title||d.id,date:new Date().toISOString().slice(0,10),page_count:d.pages||0,cost:d.cost||0,scanned_at:new Date().toISOString()});
+});}
+function addToHistory(title,status,links){
+  const list=document.getElementById('jobList');
+  if(list.querySelector('.italic')) list.innerHTML='';
+  const item=document.createElement('div');
+  item.className='bg-surface-container-lowest p-3 border border-outline-variant flex justify-between items-center';
+  item.innerHTML='<div class="flex-1 min-w-0"><span class="font-mono text-xs font-bold uppercase truncate block">'+title+'</span></div><span class="font-mono text-[10px] text-primary-container uppercase ml-2">'+status+'</span>';
+  list.prepend(item);
+}
+function loadHistory(){
+  const local=getLocal();if(!local.length) return;
+  const list=document.getElementById('jobList');list.innerHTML='';
+  local.slice().reverse().slice(0,10).forEach(s=>{addToHistory((s.title||'?')+' ['+(s.category||'')+']','done','');});
 }
 
 // ==================== SETTINGS ====================
-document.getElementById('sensitivitySlider').addEventListener('input', function() {
-  const val = this.value;
-  const motionThreshold = 11 - val;
-  const stabilityThreshold = 2.2 - (val * 0.2);
-  fetch('/api/update-setting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:'motion_threshold',value:motionThreshold})});
-  fetch('/api/update-setting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:'stability_threshold',value:stabilityThreshold})});
+function toggleSettings(){
+  const el=document.getElementById('settingsOverlay');
+  el.style.display=el.style.display==='flex'?'none':'flex';
+  if(el.style.display==='flex') loadOutputPath();
+}
+async function loadOutputPath(){try{const d=await(await fetch('/api/health')).json();if(d.output_dir) document.getElementById('outputPath').value=d.output_dir;}catch(e){}}
+async function saveOutputPath(){
+  const path=document.getElementById('outputPath').value.trim();if(!path) return;
+  const d=await(await fetch('/api/set-output',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})})).json();
+  document.getElementById('outputStatus').textContent=d.ok?'Saved: '+d.path:'Error: '+(d.error||'');
+  document.getElementById('outputStatus').style.color=d.ok?'#2aa198':'#ba1a1a';
+}
+document.getElementById('sensitivitySlider').addEventListener('input',function(){
+  const v=this.value;
+  fetch('/api/update-setting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'motion_threshold',value:11-v})});
+  fetch('/api/update-setting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'stability_threshold',value:2.2-(v*0.2)})});
 });
-
-document.getElementById('delaySlider').addEventListener('input', function() {
-  fetch('/api/update-setting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:'stability_delay',value:parseFloat(this.value)})});
+document.getElementById('delaySlider').addEventListener('input',function(){
+  fetch('/api/update-setting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'stability_delay',value:parseFloat(this.value)})});
 });
-
-function toggleMotionSettings() {
-  document.getElementById('motionSettings').classList.toggle('hidden');
-}
-
-// ==================== OUTPUT PATH ====================
-async function loadOutputPath() {
-  try {
-    const res = await fetch('/api/health');
-    const data = await res.json();
-    if (data.output_dir) {
-      document.getElementById('outputPath').value = data.output_dir;
-      document.getElementById('outputStatus').textContent = 'Current: ' + data.output_dir;
-    }
-  } catch(e) {}
-}
-
-async function saveOutputPath() {
-  const path = document.getElementById('outputPath').value.trim();
-  if (!path) return;
-  const res = await fetch('/api/set-output', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({path: path})
-  });
-  const data = await res.json();
-  if (data.ok) {
-    document.getElementById('outputStatus').textContent = 'Saved: ' + data.path;
-    document.getElementById('outputStatus').style.color = '#2aa198';
-  } else {
-    document.getElementById('outputStatus').textContent = 'Error: ' + (data.error || 'Failed');
-    document.getElementById('outputStatus').style.color = '#ba1a1a';
-  }
-}
 
 // ==================== API KEY CHECK ====================
-async function checkHealth() {
-  try {
-    const res = await fetch('/api/health');
-    const data = await res.json();
-    if (!data.has_api_key) {
-      const banner = document.createElement('div');
-      banner.className = 'fixed top-12 left-0 right-0 z-40 bg-error text-on-error px-4 py-3 font-mono text-xs text-center';
-      banner.innerHTML = 'GEMINI_API_KEY not set. Run: <code class="bg-black/20 px-1">export GEMINI_API_KEY=your_key</code> then restart. <a href="https://aistudio.google.com/apikey" target="_blank" class="underline">Get a key</a>';
-      document.body.appendChild(banner);
-    }
-  } catch(e) {}
-}
-
-// ==================== JOB HISTORY (load from localStorage + server) ====================
-async function loadJobHistory() {
-  const local = getLocalLibrary();
-  const list = document.getElementById('jobList');
-  if (local.length === 0) return;
-  list.innerHTML = '';
-  local.slice().reverse().slice(0, 15).forEach(s => {
-    const pdfUrl = s.pdf ? '/api/file/' + encodeURIComponent(s.pdf) : null;
-    const links = pdfUrl ? '<a href="' + pdfUrl + '" target="_blank" class="font-mono text-[9px] text-primary border border-primary px-1.5 py-0.5 uppercase">PDF</a>' : '';
-    addToJobHistory((s.title || 'Untitled') + ' [' + (s.category || '') + ']', 'done', links);
-  });
-}
+async function checkHealth(){try{const d=await(await fetch('/api/health')).json();
+  if(!d.has_api_key){const b=document.createElement('div');b.className='fixed top-12 left-0 right-0 z-40 bg-error text-on-error px-4 py-3 font-mono text-xs text-center';
+  b.innerHTML='GEMINI_API_KEY not set. <code class="bg-black/20 px-1">export GEMINI_API_KEY=your_key</code> <a href="https://aistudio.google.com/apikey" target="_blank" class="underline">Get key</a>';
+  document.body.appendChild(b);}}catch(e){}}
 
 // ==================== INIT ====================
 checkHealth();
-loadOutputPath();
-startCamera();
-refreshState();
-loadJobHistory();
-// Motion detection ON by default — start the loop after camera initializes
-document.getElementById('motionBadge').classList.add('on');
-setTimeout(() => requestAnimationFrame(motionLoop), 2000); // wait for camera to start
+loadHistory();
 </script>
 </body>
 </html>
