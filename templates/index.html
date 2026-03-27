@@ -84,26 +84,23 @@ h1,h2,h3,.font-display{font-family:'Space Grotesk',sans-serif;letter-spacing:-0.
 <body class="min-h-screen flex flex-col">
 
 <!-- HEADER -->
-<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-14 bg-navy border-b-3 border-ink">
-  <span class="font-display uppercase tracking-wider text-base font-bold text-teal lcd-glow cursor-pointer" onclick="goHome()">SCANDOC 9000</span>
-  <div class="flex items-center gap-3">
-    <span id="headerStatus" class="font-mono text-xs text-teal lcd-glow tracking-wider">READY</span>
-    <button onclick="toggleSettings()" class="p-1.5 text-mist hover:text-teal transition-colors"><span class="material-symbols-outlined text-lg">settings</span></button>
-  </div>
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 md:px-8 h-16 bg-navy">
+  <span class="font-display uppercase tracking-wider text-lg font-bold text-teal lcd-glow cursor-pointer" onclick="goHome()">SCANDOC 9000</span>
+  <span id="headerStatus" class="font-mono text-xs text-teal lcd-glow tracking-wider">READY</span>
 </header>
 
 <!-- TAB BAR -->
-<div class="fixed top-14 w-full z-40 flex">
-  <button id="tabUpload" class="tab active flex-1 py-3.5 font-display text-sm font-semibold uppercase tracking-wider text-center" onclick="switchTab('upload')">
+<div class="fixed top-16 w-full z-40 flex border-b-2 border-ink/10">
+  <button id="tabUpload" class="tab active flex-1 py-4 font-display text-sm font-semibold uppercase tracking-wider text-center" onclick="switchTab('upload')">
     <span class="material-symbols-outlined text-base mr-1.5 align-[-3px]">upload_file</span>Upload PDF
   </button>
-  <button id="tabScan" class="tab flex-1 py-3.5 font-display text-sm font-semibold uppercase tracking-wider text-center" onclick="switchTab('scan')">
+  <button id="tabScan" class="tab flex-1 py-4 font-display text-sm font-semibold uppercase tracking-wider text-center" onclick="switchTab('scan')">
     <span class="material-symbols-outlined text-base mr-1.5 align-[-3px]">photo_camera</span>Scan Pages
   </button>
 </div>
 
 <!-- MAIN -->
-<main class="pt-28 pb-8 px-6 md:px-12 flex-1">
+<main class="pt-32 pb-8 px-6 md:px-12 flex-1">
   <div class="max-w-4xl mx-auto">
 
     <!-- ============ UPLOAD TAB ============ -->
@@ -160,18 +157,31 @@ h1,h2,h3,.font-display{font-family:'Space Grotesk',sans-serif;letter-spacing:-0.
     <!-- ============ SCAN TAB ============ -->
     <div id="panelScan" class="tab-panel" style="display:none">
       <!-- Camera viewfinder -->
-      <div class="relative bg-black rounded overflow-hidden mb-4" style="aspect-ratio:4/3;max-height:65vh;">
+      <div class="relative bg-black overflow-hidden mb-4" style="aspect-ratio:4/3;max-height:50vh;">
         <video id="video" autoplay playsinline muted class="w-full h-full object-cover block"></video>
         <canvas id="motionCanvas" class="hidden"></canvas>
         <div id="flash"></div>
+        <!-- Preset bounding box overlay -->
+        <div id="presetOverlay" class="absolute inset-0 pointer-events-none" style="display:none">
+          <div id="presetBox" class="absolute border-2 border-dashed border-teal/50"></div>
+          <div id="presetLabel" class="absolute top-2 left-1/2 -translate-x-1/2 font-mono text-[10px] text-teal bg-black/60 px-2 py-0.5 uppercase tracking-wider"></div>
+        </div>
         <!-- Motion status bar -->
-        <div class="absolute bottom-0 left-0 right-0 bg-black/80 py-3 px-4 text-center">
-          <span id="motionText" class="font-headline text-sm text-primary-container lcd-glow uppercase tracking-wider">Turn to next page</span>
+        <div class="absolute bottom-0 left-0 right-0 bg-navy/90 py-2.5 px-4 text-center">
+          <span id="motionText" class="font-display text-sm text-teal lcd-glow uppercase tracking-wider">Turn to next page</span>
         </div>
         <!-- Page count -->
-        <div class="absolute top-3 right-3 bg-black/70 px-3 py-1.5 font-mono text-sm text-primary-container">
+        <div class="absolute top-3 right-3 bg-navy/80 px-3 py-1.5 font-mono text-sm text-teal">
           <span id="pageCount">0</span> pages
         </div>
+      </div>
+
+      <!-- Bounding box presets -->
+      <div class="flex gap-2 flex-wrap mb-4">
+        <button onclick="setPreset('none')" class="preset-btn btn-primary !py-1.5 !px-3 !text-xs !border-2" data-preset="none">None</button>
+        <button onclick="setPreset('openbook')" class="preset-btn btn-secondary !py-1.5 !px-3 !text-xs !border-2" data-preset="openbook">Open Book</button>
+        <button onclick="setPreset('paperback')" class="preset-btn btn-secondary !py-1.5 !px-3 !text-xs !border-2" data-preset="paperback">Paperback</button>
+        <button onclick="setPreset('letter')" class="preset-btn btn-secondary !py-1.5 !px-3 !text-xs !border-2" data-preset="letter">Letter</button>
       </div>
 
       <!-- Camera controls -->
@@ -183,9 +193,10 @@ h1,h2,h3,.font-display{font-family:'Space Grotesk',sans-serif;letter-spacing:-0.
           Next Doc
         </button>
       </div>
-      <div class="flex gap-2 mb-4">
-        <button onclick="rotateImage()" class="btn-secondary !py-2 !px-3 !text-xs">↻ <span id="rotLabel">0°</span></button>
-        <button onclick="toggleMotion()" class="btn-secondary !py-2 !px-3 !text-xs">Motion <span id="motionLabel">ON</span></button>
+      <div class="flex gap-2 items-center mb-4">
+        <button onclick="rotateImage()" class="btn-secondary !py-2 !px-3 !text-xs !border-2">↻ <span id="rotLabel">0°</span></button>
+        <button onclick="toggleMotion()" class="btn-secondary !py-2 !px-3 !text-xs !border-2">Motion <span id="motionLabel">ON</span></button>
+        <button onclick="toggleSettings()" class="btn-secondary !py-2 !px-3 !text-xs !border-2"><span class="material-symbols-outlined text-sm align-[-2px]">settings</span> Settings</button>
         <button id="btnFinish" onclick="finishScanning()" disabled class="ml-auto btn-danger !py-2 !px-4 !text-xs disabled:opacity-30">
           Done (<span id="finishCount">0</span> pages)
         </button>
@@ -280,6 +291,30 @@ function switchTab(tab){
 function goHome(){
   switchTab('upload');
   resetUpload();
+}
+
+// ==================== PRESETS (bounding box) ====================
+const PRESETS={none:{ratio:null,label:''},openbook:{ratio:12/9,label:'Open Book 12×9'},paperback:{ratio:6/9,label:'Paperback 6×9'},letter:{ratio:8.5/11,label:'Letter 8.5×11'}};
+let currentPreset='none';
+function setPreset(name){
+  currentPreset=name;
+  document.querySelectorAll('.preset-btn').forEach(b=>{
+    if(b.dataset.preset===name){b.className=b.className.replace('btn-secondary','btn-primary');}
+    else{b.className=b.className.replace('btn-primary','btn-secondary');}
+  });
+  const overlay=document.getElementById('presetOverlay');
+  const p=PRESETS[name];
+  if(!p||!p.ratio){overlay.style.display='none';return;}
+  overlay.style.display='block';
+  document.getElementById('presetLabel').textContent=p.label;
+  const pad=0.08,maxW=1-2*pad,maxH=1-2*pad;
+  let w,h;
+  if(p.ratio>1){w=maxW;h=maxW/p.ratio;}else{h=maxH;w=maxH*p.ratio;}
+  if(w>maxW){w=maxW;h=w/p.ratio;}
+  if(h>maxH){h=maxH;w=h*p.ratio;}
+  const box=document.getElementById('presetBox');
+  box.style.left=((1-w)/2*100)+'%';box.style.top=((1-h)/2*100)+'%';
+  box.style.width=(w*100)+'%';box.style.height=(h*100)+'%';
 }
 
 // ==================== UPLOAD STATES ====================
