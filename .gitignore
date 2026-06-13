@@ -1,12 +1,25 @@
 venv/
+.marker-venv/
 __pycache__/
 *.pyc
 .env
 uploads/
 output/
+data/
 sessions/
 .DS_Store
 mockups/
 tasks/
 CLAUDE.md
 .claude/
+
+# Corpus-factory OCR labs — TEXT ONLY enters git (transcripts, verdicts, ledgers, scripts).
+# Page scans, column crops, zoom evidence and source PDFs live in object storage / Internet
+# Archive and are referenced by hash. Hard rule from the 50GB tmp_pack incident; ~143MB of
+# scans across these two dirs must never enter the repo.
+pg52-innocent-letters/pages/
+pg52-innocent-letters/*.pdf
+pg52-innocent-letters/*.png
+phase0-pg-benchmark/pages/
+phase0-pg-benchmark/*.pdf
+phase0-pg-benchmark/*.png

@@ -1,0 +1,21 @@
+# Ensemble disputes idx149 (19)
+
+- ctx …Frontone Ducæo positæ | TRUTH: fuere : | B: fuere:
+- ctx …epistola Honorii ad | TRUTH: Arcadium : | B: Arcadium:
+- ctx …commemoravit, deindeque iterum | TRUTH: exagitatum | B: exagitatuin
+- ctx …in baptisterium factam | TRUTH: enarravit : | B: enarravit:
+- ctx …contigerunt, ne quidquam | TRUTH: scribat : | B: scribat:
+- ctx …: plane declarat, | TRUTH: eo | B: co
+- ctx …404 hanc epistolam | TRUTH: scripsit : | B: scripsit:
+- ctx …ἐν Κυρίῳ χαίρειν. | TRUTH: — α´. | B: α'.
+- ctx …καὶ ὀλοφυρμὸν εἰργάσατο. | TRUTH: Ἀλλ´ | B: Ἀλλ᾽
+- ctx …τῆς Ἐκκλησίας σταίη | TRUTH: χειμὼν· | B: χειμών·
+- ctx …καὶ Εὐγένιον πεῖσαι | TRUTH: τάς | B: τὰς
+- ctx …καὶ πελάγους κατατολμῆσαι | TRUTH: τοσοῦa Maxima | B: τοσούᵃ Maximæ
+- ctx …Edit. εἰς αὐτάς. | TRUTH: Infra | B: Infra,
+- ctx …mss. et Editi. | TRUTH: Mox | B: Μοι
+- ctx …δραμεῖν. Edit. ἀναδραμεῖν. | TRUTH: b | B: ᵇ
+- ctx …καὶ Κυριακόν. Ibid. | TRUTH: Co.slinianus | B: Coslinianus
+- ctx …ἀγαπητοὺς τῶν διακόνων | TRUTH: b | B: ᵇ
+- ctx …καὶ θεοφιλοῦς Κωνσταντινουπόλεως | TRUTH: ἐπιβὰς, | B: ἐπιβάς,
+- ctx …ἔξω που τῆς | TRUTH: πόλεως, | B: πόλεως
